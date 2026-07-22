@@ -1,0 +1,18 @@
+# Binaries
+termelody
+
+# Go build output
+*.exe
+*.test
+*.out
+
+# Debug files
+*.prof
+
+# IDE/editor files
+.idea/
+.vscode/
+
+# Neovim
+*.swp
+*.swo
