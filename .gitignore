@@ -1,5 +1,5 @@
 # Binaries
-termelody
+/termelody
 
 # Go build output
 *.exe
