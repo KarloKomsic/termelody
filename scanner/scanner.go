@@ -25,8 +25,8 @@ var supportedExtensions = []string{
 }
 
 func isSupportedExtension(ext string) bool {
-	// Normalize the extension because filesystem filenames may use different
-	// casing (e.g. ".MP3" vs ".mp3"), but format support itself is case-insensitive.
+	// Normalize the extension because filenames may use different casing
+	// (e.g. ".MP3" vs ".mp3"), while format support is case-insensitive.
 	ext = strings.ToLower(ext)
 
 	for _, supportedExt := range supportedExtensions {

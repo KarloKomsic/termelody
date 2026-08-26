@@ -12,6 +12,7 @@ termelody
 # IDE/editor files
 .idea/
 .vscode/
+music/
 
 # Neovim
 *.swp

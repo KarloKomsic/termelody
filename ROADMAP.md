@@ -8,7 +8,7 @@
 
 ## Phase 2 - Scanner
 
-- [ ] Learn basic Go
+- [x] Learn basic Go
 - [ ] Scan music directory
 - [ ] Detect supported formats
 - [ ] Create Track structure
