@@ -36,7 +36,9 @@ func main() {
 	}
 	defer p.Close()
 
-	fmt.Println("Controls: 1-9 play track, p pause/resume, s stop, q quit")
+	p.SetPlaylist(tracks)
+
+	fmt.Println("Controls: 1-9 play, n next, b prev, p pause, s stop, q quit")
 	fmt.Println()
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -63,18 +65,34 @@ func main() {
 			p.Stop()
 			fmt.Println("Stopped")
 
+		case input == "n":
+			if err := p.Next(); err != nil {
+				fmt.Println(err)
+			} else {
+				t := p.Track()
+				fmt.Printf("Playing: %s - %s\n", t.Artist, t.Title)
+			}
+
+		case input == "b":
+			if err := p.Prev(); err != nil {
+				fmt.Println(err)
+			} else {
+				t := p.Track()
+				fmt.Printf("Playing: %s - %s\n", t.Artist, t.Title)
+			}
+
 		default:
 			n, err := strconv.Atoi(input)
 			if err != nil || n < 1 || n > len(tracks) {
 				fmt.Println("Unknown command")
 				continue
 			}
-			track := tracks[n-1]
-			if err := p.Play(track); err != nil {
+			if err := p.PlayIndex(n - 1); err != nil {
 				fmt.Println(err)
 				continue
 			}
-			fmt.Printf("Playing: %s - %s\n", track.Artist, track.Title)
+			t := p.Track()
+			fmt.Printf("Playing: %s - %s\n", t.Artist, t.Title)
 		}
 	}
 }
