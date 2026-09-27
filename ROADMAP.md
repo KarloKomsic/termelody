@@ -9,9 +9,9 @@
 ## Phase 2 - Scanner
 
 - [x] Learn basic Go
-- [ ] Scan music directory
-- [ ] Detect supported formats
-- [ ] Create Track structure
+- [x] Scan music directory
+- [x] Detect supported formats
+- [x] Create Track structure
 
 ## Phase 3 - Playback
 
