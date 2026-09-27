@@ -6,6 +6,9 @@
 *.test
 *.out
 
+# Agents
+AGENTS.md
+
 # Debug files
 *.prof
 
