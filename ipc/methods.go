@@ -1,0 +1,55 @@
+package ipc
+
+// Play sends a loadfile command to mpv. This replaces any
+// currently playing track.
+func (m *MPV) Play(filePath string) error {
+	_, err := m.Command([]any{"loadfile", filePath})
+	return err
+}
+
+// Pause pauses playback.
+func (m *MPV) Pause() error {
+	_, err := m.Command([]any{"set_property", "pause", true})
+	return err
+}
+
+// Resume unpauses playback.
+func (m *MPV) Resume() error {
+	_, err := m.Command([]any{"set_property", "pause", false})
+	return err
+}
+
+// Stop stops playback entirely.
+func (m *MPV) Stop() error {
+	_, err := m.Command([]any{"stop"})
+	return err
+}
+
+// SetProperty sets an arbitrary mpv property by name.
+func (m *MPV) SetProperty(name string, value any) error {
+	_, err := m.Command([]any{"set_property", name, value})
+	return err
+}
+
+// GetProperty queries an arbitrary mpv property by name.
+func (m *MPV) GetProperty(name string) (any, error) {
+	return m.Command([]any{"get_property", name})
+}
+
+// TogglePause flips the pause state.
+func (m *MPV) TogglePause() error {
+	_, err := m.Command([]any{"cycle", "pause"})
+	return err
+}
+
+// Seek moves to an absolute position in seconds.
+func (m *MPV) Seek(seconds float64) error {
+	_, err := m.Command([]any{"seek", seconds, "absolute"})
+	return err
+}
+
+// Quit tells mpv to exit.
+func (m *MPV) Quit() error {
+	_, err := m.Command([]any{"quit"})
+	return err
+}

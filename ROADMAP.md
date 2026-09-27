@@ -15,6 +15,10 @@
 
 ## Phase 3 - Playback
 
-- [ ] Integrate mpv
-- [ ] Implement play/pause
-- [ ] Implement controls
+- [x] IPC client for mpv (Unix socket)
+- [x] Launch and control mpv from Go
+- [x] Player package with state tracking
+- [x] Basic CLI with keyboard controls
+- [ ] Playlist navigation (next/prev)
+- [ ] Volume and seek controls
+- [ ] Error recovery and reconnection
