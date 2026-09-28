@@ -10,7 +10,19 @@ A keyboard-driven terminal music player written in Go.
 
 ## Status
 
-Early development.
+Early development. Playback, playlist navigation, and seeking work through mpv IPC.
+
+## Controls
+
+| Key | Action |
+|---|---|
+| `j` / `k`, `↓` / `↑` | move selection |
+| `←` / `→` | seek 5s back / forward |
+| `enter` | play selected track |
+| `space` | play / pause |
+| `n` / `p`, `>` / `<` | next / previous track |
+| `s` | stop |
+| `q` | quit |
 
 ## Goals
 

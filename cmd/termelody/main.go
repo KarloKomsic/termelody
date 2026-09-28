@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -12,7 +13,15 @@ import (
 )
 
 func main() {
-	tracks, err := loader.Load("music")
+	// Resolve to an absolute path so playback works regardless of the
+	// directory termelody is launched from.
+	dir, err := filepath.Abs("music")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	tracks, err := loader.Load(dir)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -32,7 +41,13 @@ func main() {
 
 	p.SetPlaylist(tracks)
 
-	m := ui.New(p, tracks)
+	// cfg is the single place TUI options get set. The zero value means
+	// "use the defaults", so only overrides need to appear here. Adding a
+	// flag or config file later means parsing it into this struct and
+	// nothing in the ui package changes.
+	cfg := ui.Config{}
+
+	m := ui.New(p, tracks, cfg)
 	pgm := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := pgm.Run(); err != nil {

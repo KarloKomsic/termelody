@@ -1,0 +1,151 @@
+package ui
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/charmbracelet/bubbletea"
+
+	"codeberg.org/karlokomsic/termelody/player"
+	"codeberg.org/karlokomsic/termelody/playlist"
+)
+
+func keyMsg(k tea.KeyType) tea.KeyMsg {
+	return tea.KeyMsg{Type: k}
+}
+
+func runeMsg(r rune) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+}
+
+func newTestModel(t *testing.T, cfg Config) Model {
+	t.Helper()
+
+	p, err := player.New()
+	if err != nil {
+		t.Skipf("mpv unavailable: %v", err)
+	}
+	t.Cleanup(func() { p.Close() })
+
+	tracks := []playlist.Track{
+		{Path: "/music/SNAP! - The Power.mp3"},
+		{Path: "/music/ZZ Top Sharp Dressed Man.mp3", Artist: "ZZ Top", Title: "Sharp Dressed Man"},
+	}
+	p.SetPlaylist(tracks)
+
+	return New(p, tracks, cfg)
+}
+
+// apply feeds a message through Update and returns the updated Model.
+func (m Model) apply(msg tea.Msg) Model {
+	updated, _ := m.Update(msg)
+	return updated.(Model)
+}
+
+func TestConfigDefaults(t *testing.T) {
+	if got := (Config{}).withDefaults().SeekStep; got != defaultSeekStep {
+		t.Errorf("zero Config SeekStep = %s, want %s", got, defaultSeekStep)
+	}
+
+	// An explicit value must survive rather than being treated as unset.
+	if got := (Config{SeekStep: 30 * time.Second}).withDefaults().SeekStep; got != 30*time.Second {
+		t.Errorf("explicit SeekStep = %s, want 30s", got)
+	}
+}
+
+func TestArrowsSeekWithoutMovingSelection(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	// The fixture paths are fake, so loadfile fails and the player stays
+	// stopped, which makes Seek a no-op. That is fine here: the regression
+	// worth guarding is arrows being wired to navigation, which would move
+	// the cursor regardless of playback state.
+	m = m.apply(keyMsg(tea.KeyEnter))
+
+	start := m.cursor
+	m = m.apply(keyMsg(tea.KeyRight))
+	m = m.apply(keyMsg(tea.KeyLeft))
+
+	if m.cursor != start {
+		t.Errorf("cursor = %d, want %d: arrows must seek, not navigate", m.cursor, start)
+	}
+}
+
+func TestNextPrevKeysMoveSelection(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m = m.apply(keyMsg(tea.KeyEnter))
+
+	m = m.apply(runeMsg('n'))
+	if m.cursor != 1 {
+		t.Errorf("after n: cursor = %d, want 1", m.cursor)
+	}
+
+	m = m.apply(runeMsg('p'))
+	if m.cursor != 0 {
+		t.Errorf("after p: cursor = %d, want 0", m.cursor)
+	}
+
+	// > and < are aliases for n and p.
+	m = m.apply(runeMsg('>'))
+	if m.cursor != 1 {
+		t.Errorf("after >: cursor = %d, want 1", m.cursor)
+	}
+
+	m = m.apply(runeMsg('<'))
+	if m.cursor != 0 {
+		t.Errorf("after <: cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestStepWrapsAtBothEnds(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	m.step(-1)
+	if m.cursor != 1 {
+		t.Errorf("step back from start: cursor = %d, want 1", m.cursor)
+	}
+
+	m.step(1)
+	if m.cursor != 0 {
+		t.Errorf("step forward from end: cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestViewShowsConfiguredSeekStep(t *testing.T) {
+	m := newTestModel(t, Config{SeekStep: 10 * time.Second})
+	m.width, m.height = 100, 24
+
+	out := m.View()
+
+	if !strings.Contains(out, "seek 10s") {
+		t.Error("expected help bar to advertise the configured seek step")
+	}
+}
+
+func TestViewIsCenteredAndOmitsPathPrefix(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 100, 24
+
+	out := m.View()
+
+	if strings.Contains(out, "music/") {
+		t.Error("view should not leak the music/ path prefix")
+	}
+	if !strings.Contains(out, "SNAP! - The Power") {
+		t.Error("expected filename fallback in view")
+	}
+	if !strings.Contains(out, "ZZ Top - Sharp Dressed Man") {
+		t.Error("expected metadata label in view")
+	}
+
+	// Centering means every non-blank line is indented.
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") {
+			t.Errorf("line not indented, so not centered: %q", line)
+		}
+	}
+}

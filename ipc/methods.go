@@ -48,6 +48,13 @@ func (m *MPV) Seek(seconds float64) error {
 	return err
 }
 
+// SeekRelative moves playback by the given number of seconds, where a negative
+// amount seeks backwards.
+func (m *MPV) SeekRelative(seconds float64) error {
+	_, err := m.Command([]any{"seek", seconds, "relative"})
+	return err
+}
+
 // Quit tells mpv to exit.
 func (m *MPV) Quit() error {
 	_, err := m.Command([]any{"quit"})

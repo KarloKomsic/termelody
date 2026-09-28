@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"codeberg.org/karlokomsic/termelody/ipc"
 	"codeberg.org/karlokomsic/termelody/playlist"
@@ -160,6 +161,15 @@ func (p *Player) Stop() error {
 	}
 	p.state = StateStopped
 	return nil
+}
+
+// Seek shifts playback by delta, where a negative delta seeks backwards.
+// Seeking with nothing loaded is a no-op, since mpv has no position to move.
+func (p *Player) Seek(delta time.Duration) error {
+	if p.state == StateStopped {
+		return nil
+	}
+	return p.mpv.SeekRelative(delta.Seconds())
 }
 
 // Close shuts down the mpv process.
