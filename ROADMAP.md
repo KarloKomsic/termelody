@@ -21,16 +21,19 @@
 - [x] Playlist navigation (next/prev)
 - [x] Seek forward/back with configurable step
 - [x] Bubble Tea TUI
+- [x] Subscribe to mpv events; state derived from reality
+- [x] Own the mpv process (reap it, surface crashes, clean up socket)
 
 ## Phase 4 - Polish
 
 - [x] Centered layout
 - [x] Keybindings
-- [ ] Playback position indicator and progress bar
+- [x] Playback position indicator and progress bar
 - [ ] Auto-advance to next track on end
 - [ ] Volume control
 - [ ] Configurable seek step via flag or config file
 - [ ] Recursive directory scanning
+- [ ] Scrolling for long playlists
 - [ ] Command-line argument for music directory
 - [ ] Shuffle and repeat
 - [ ] Error recovery and reconnection

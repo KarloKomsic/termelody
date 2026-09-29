@@ -10,7 +10,9 @@ A keyboard-driven terminal music player written in Go.
 
 ## Status
 
-Early development. Playback, playlist navigation, and seeking work through mpv IPC.
+Early development. Playback, playlist navigation, and seeking work through mpv IPC,
+with playback state and position read from the event stream mpv pushes rather
+than assumed from the commands that were sent.
 
 ## Controls
 

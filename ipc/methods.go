@@ -54,9 +54,3 @@ func (m *MPV) SeekRelative(seconds float64) error {
 	_, err := m.Command([]any{"seek", seconds, "relative"})
 	return err
 }
-
-// Quit tells mpv to exit.
-func (m *MPV) Quit() error {
-	_, err := m.Command([]any{"quit"})
-	return err
-}

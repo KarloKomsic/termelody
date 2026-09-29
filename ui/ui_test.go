@@ -149,3 +149,129 @@ func TestViewIsCenteredAndOmitsPathPrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatDuration(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{0, "0:00"},
+		{-5 * time.Second, "0:00"},
+		{59 * time.Second, "0:59"},
+		{time.Minute, "1:00"},
+		{90 * time.Second, "1:30"},
+		{59*time.Minute + 59*time.Second, "59:59"},
+		{time.Hour, "1:00:00"},
+		{90 * time.Minute, "1:30:00"},
+		{time.Second + 400*time.Millisecond, "0:01"},
+	}
+
+	for _, c := range cases {
+		if got := formatDuration(c.in); got != c.want {
+			t.Errorf("formatDuration(%s) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestProgressBarFillsInProportion(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width = 80
+	m.pos, m.dur = 30*time.Second, 60*time.Second
+
+	bar := m.progressBar()
+	if !strings.Contains(bar, "0:30 / 1:00") {
+		t.Errorf("bar missing time labels: %q", bar)
+	}
+
+	if drawn := strings.Count(bar, "━"); drawn != 40 {
+		t.Errorf("bar drew %d segments, want 40", drawn)
+	}
+}
+
+func TestBarSegments(t *testing.T) {
+	cases := []struct {
+		width    int
+		fraction float64
+		wantFill int
+	}{
+		{40, 0, 0},
+		{40, -1, 0},
+		{40, 0.5, 20},
+		{40, 1, 40},
+		{40, 1.5, 40},
+		{40, 0.0001, 1}, // must not round away to nothing
+		{10, 0.95, 9},
+		{1, 0.5, 1},
+	}
+
+	for _, c := range cases {
+		filled, left := barSegments(c.width, c.fraction)
+		if filled != c.wantFill {
+			t.Errorf("barSegments(%d, %v) filled = %d, want %d", c.width, c.fraction, filled, c.wantFill)
+		}
+		if filled+left != c.width {
+			t.Errorf("barSegments(%d, %v) total = %d, want %d", c.width, c.fraction, filled+left, c.width)
+		}
+	}
+}
+
+func TestProgressBarHidesAtFullAndZero(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width = 80
+
+	// Wholly played: the filled run must reach the end and leave nothing.
+	m.pos, m.dur = 60*time.Second, 60*time.Second
+	if s := m.progressBar(); !strings.Contains(s, "1:00 / 1:00") {
+		t.Errorf("missing labels: %q", s)
+	}
+
+	// A position past the end must not overflow the bar.
+	m.pos = 90 * time.Second
+	if drawn := strings.Count(m.progressBar(), "━"); drawn != 40 {
+		t.Errorf("bar drew %d segments at full progress, want 40", drawn)
+	}
+}
+
+func TestProgressBarOmitsBarWhenDurationUnknown(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width = 80
+	m.pos, m.dur = 42*time.Second, 0
+
+	bar := m.progressBar()
+	if strings.Contains(bar, "━") {
+		t.Errorf("drew a bar with no duration: %q", bar)
+	}
+	if !strings.Contains(bar, "0:42") {
+		t.Errorf("should still show elapsed time: %q", bar)
+	}
+}
+
+func TestProgressBarFallsBackToLabelsWhenNarrow(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width = 20
+	m.pos, m.dur = 30*time.Second, 60*time.Second
+
+	bar := m.progressBar()
+	if strings.Contains(bar, "━") {
+		t.Errorf("drew a bar in a %d column terminal: %q", m.width, bar)
+	}
+	if !strings.Contains(bar, "0:30 / 1:00") {
+		t.Errorf("should fall back to labels: %q", bar)
+	}
+}
+
+func TestTickReadsPositionAndReArms(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	next, cmd := m.Update(tickMsg(time.Now()))
+	if cmd == nil {
+		t.Fatal("tick did not schedule another")
+	}
+	updated, ok := next.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want Model", next)
+	}
+	if updated.pos != m.player.Position() {
+		t.Errorf("pos = %s, want %s", updated.pos, m.player.Position())
+	}
+}

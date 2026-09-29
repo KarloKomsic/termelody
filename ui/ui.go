@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,14 @@ var (
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			MarginTop(1)
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("203")).
+			Bold(true).
+			MarginTop(1)
+
+	barDoneStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	barLeftStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 )
 
 // defaultSeekStep is how far the arrow keys jump when no config overrides it.
@@ -55,6 +64,19 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
+// tickInterval is how often the progress readout refreshes. It is far slower
+// than the rate mpv reports position, because a redraw that often buys nothing
+// visible and costs a full repaint of the screen.
+const tickInterval = 200 * time.Millisecond
+
+// tickMsg asks the model to refresh the progress readout.
+type tickMsg time.Time
+
+// tick schedules the next refresh.
+func tick() tea.Cmd {
+	return tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
 // Model holds the entire state of the TUI.
 type Model struct {
 	player   *player.Player
@@ -63,7 +85,35 @@ type Model struct {
 	cursor   int
 	width    int
 	height   int
+	pos      time.Duration
+	dur      time.Duration
+	mpvErr   error
 	quitting bool
+}
+
+// eventMsg carries a playback event into the Bubble Tea loop. Events have to
+// arrive as messages rather than being read during View, so that every change
+// to the model happens on Bubble Tea's single goroutine.
+type eventMsg player.Event
+
+// mpvGoneMsg reports that the mpv process is no longer available.
+type mpvGoneMsg struct{ err error }
+
+// waitForEvent blocks until mpv reports something, or until it exits. Because
+// it is a tea.Cmd it runs on Bubble Tea's own goroutine, and returning a fresh
+// command from Update re-arms the listener.
+func waitForEvent(p *player.Player) tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case ev, ok := <-p.Events():
+			if !ok {
+				return mpvGoneMsg{}
+			}
+			return eventMsg(ev)
+		case <-p.Done():
+			return mpvGoneMsg{}
+		}
+	}
 }
 
 // New builds a Model for the given player and track list. A zero Config is
@@ -78,7 +128,7 @@ func New(p *player.Player, tracks []playlist.Track, cfg Config) Model {
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return nil
+	return tea.Batch(waitForEvent(m.player), tick())
 }
 
 // Update implements tea.Model.
@@ -87,6 +137,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		return m, nil
+
+	case tickMsg:
+		// Position is read here rather than carried in as an event, so that
+		// the refresh rate is a choice of the UI instead of a side effect of
+		// how often mpv happens to report.
+		m.pos = m.player.Position()
+		m.dur = m.player.Duration()
+		return m, tick()
+
+	case eventMsg:
+		// The player has already folded this event into its state, so all
+		// that is left is to keep listening.
+		return m, waitForEvent(m.player)
+
+	case mpvGoneMsg:
+		// Without mpv there is nothing to control, so stop asking it.
+		m.mpvErr = errors.New("mpv exited unexpectedly")
 		return m, nil
 
 	case tea.KeyMsg:
@@ -111,12 +179,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case " ":
-			switch m.player.State() {
-			case player.StatePlaying:
-				m.player.Pause()
-			case player.StatePaused:
-				m.player.Resume()
-			}
+			// mpv reports the result, so there is no local decision to
+			// make and no way for this to disagree with reality.
+			m.player.TogglePause()
 
 		case "left":
 			m.seek(-m.cfg.SeekStep)
@@ -138,6 +203,93 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// progressBar renders the position within the track. When mpv does not report
+// a duration, which it does not for streams and some containers, only the
+// elapsed time is shown rather than a bar that would be meaningless.
+func (m Model) progressBar() string {
+	const (
+		indent   = "  "
+		maxWidth = 40
+	)
+
+	elapsed := formatDuration(m.pos)
+
+	if m.dur <= 0 {
+		return statusStyle.Render(indent + elapsed)
+	}
+
+	// The bar shares the line with the time labels, so what is left of the
+	// available width is what the bar itself can use.
+	labels := fmt.Sprintf("%s / %s", elapsed, formatDuration(m.dur))
+	width := m.width - lipgloss.Width(labels) - lipgloss.Width(indent) - 2
+	if m.width == 0 {
+		width = maxWidth
+	}
+	if width < 10 {
+		// Too narrow to draw a bar honestly, so the numbers stand alone.
+		return statusStyle.Render(indent + labels)
+	}
+	if width > maxWidth {
+		width = maxWidth
+	}
+
+	filled, left := barSegments(width, m.fraction())
+
+	bar := barDoneStyle.Render(strings.Repeat("━", filled)) +
+		barLeftStyle.Render(strings.Repeat("━", left))
+
+	return statusStyle.Render(indent+labels+"  ") + bar
+}
+
+// barSegments splits a bar of the given width into the part already played and
+// the part remaining, keeping the total exactly width so the bar never shifts
+// as playback advances.
+func barSegments(width int, fraction float64) (filled, left int) {
+	switch {
+	case fraction <= 0:
+		return 0, width
+	case fraction >= 1:
+		return width, 0
+	}
+
+	filled = int(float64(width) * fraction)
+	// A fraction just above zero must not round away to nothing, or a
+	// barely-started track would show an untouched bar.
+	if filled == 0 {
+		filled = 1
+	}
+	if filled > width {
+		filled = width
+	}
+	return filled, width - filled
+}
+
+// fraction reports playback progress, guarding against a position that briefly
+// runs past the duration while a new track is settling.
+func (m Model) fraction() float64 {
+	if m.dur <= 0 {
+		return 0
+	}
+	return min(float64(m.pos)/float64(m.dur), 1)
+}
+
+// formatDuration renders a duration as m:ss, or h:mm:ss once it passes an hour.
+func formatDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+
+	total := int(d.Round(time.Second).Seconds())
+	seconds := total % 60
+	minutes := (total / 60) % 60
+	hours := total / 3600
+
+	if hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
+	}
+	return fmt.Sprintf("%d:%02d", minutes, seconds)
+}
+
 // View implements tea.Model.
 func (m Model) View() string {
 	if m.quitting {
@@ -155,6 +307,12 @@ func (m Model) View() string {
 	}
 
 	s += statusStyle.Render(fmt.Sprintf("  [%s]", m.player.State())) + "\n"
+	s += m.progressBar() + "\n"
+
+	if m.mpvErr != nil {
+		s += errorStyle.Render(fmt.Sprintf("  %v", m.mpvErr)) + "\n"
+	}
+
 	s += helpStyle.Render(fmt.Sprintf(
 		"  j/k move · enter play · space pause · ←/→ seek %ds · n/p next/prev · s stop · q quit",
 		int(m.cfg.SeekStep.Seconds()),

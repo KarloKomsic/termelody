@@ -1,0 +1,376 @@
+package ipc
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+)
+
+// testFile creates a short silent WAV so tests do not depend on the gitignored
+// music/ directory. Returns an empty string if the file cannot be created, in
+// which case the caller should skip.
+func testFile(t *testing.T, seconds int) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "tone.wav")
+
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return ""
+	}
+
+	cmd := exec.Command("ffmpeg",
+		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+		"-t", itoa(seconds), "-y", path,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg could not build a fixture: %v: %s", err, out)
+	}
+
+	return path
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
+
+func newTestMPV(t *testing.T) *MPV {
+	t.Helper()
+
+	sock := filepath.Join(t.TempDir(), "mpv.sock")
+
+	m, err := LaunchEmpty(sock)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	t.Cleanup(func() { m.terminate() })
+	return m
+}
+
+// awaitEvent reads events until one with the wanted name arrives.
+func awaitEvent(t *testing.T, m *MPV, want string, timeout time.Duration) Event {
+	t.Helper()
+	return awaitEventWhere(t, m, want, nil, timeout)
+}
+
+// awaitEventWhere reads events until one with the wanted name satisfies match.
+// Observing a property makes mpv report its current value straight away, so
+// callers that care about a specific change must filter rather than take the
+// first event of that name.
+func awaitEventWhere(t *testing.T, m *MPV, want string, match func(Event) bool, timeout time.Duration) Event {
+	t.Helper()
+
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev, ok := <-m.Events():
+			if !ok {
+				t.Fatalf("event channel closed before %q", want)
+			}
+			if ev.Name != want {
+				continue
+			}
+			if match == nil || match(ev) {
+				return ev
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %q", want)
+		}
+	}
+}
+
+// decodeChange reads a property-change event.
+func decodeChange(t *testing.T, ev Event) (name string, data bool) {
+	t.Helper()
+
+	var change struct {
+		Name string `json:"name"`
+		Data bool   `json:"data"`
+	}
+	if err := json.Unmarshal(ev.Raw, &change); err != nil {
+		t.Fatalf("property-change payload: %v", err)
+	}
+	return change.Name, change.Data
+}
+
+func TestCommandReturnsReplyNotEvent(t *testing.T) {
+	m := newTestMPV(t)
+
+	// With events being pushed to every connection, a naive read can pick up
+	// an event instead of the reply. Repeat to make the race likely.
+	for range 20 {
+		data, err := m.Command([]any{"get_property", "pause"})
+		if err != nil {
+			t.Fatalf("get_property: %v", err)
+		}
+		if _, ok := data.(bool); !ok {
+			t.Fatalf("data = %#v, want bool", data)
+		}
+	}
+}
+
+func TestCommandSkipsInterleavedEvents(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	m := newTestMPV(t)
+	if err := m.Play(file); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+
+	// Playing generates a burst of events (start-file, file-loaded, ...) that
+	// land on the same connection the commands use.
+	for range 30 {
+		if _, err := m.Command([]any{"get_property", "pause"}); err != nil {
+			t.Fatalf("get_property during event burst: %v", err)
+		}
+	}
+}
+
+func TestEventsArrive(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	// mpv is started idle and the file is loaded afterwards, so the listener
+	// is already attached and cannot miss the start of playback.
+	m := newTestMPV(t)
+	if err := m.Play(file); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+
+	awaitEvent(t, m, "file-loaded", 10*time.Second)
+}
+
+func TestEndFileReportsEOFReason(t *testing.T) {
+	file := testFile(t, 1)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	m := newTestMPV(t)
+	if err := m.Play(file); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+
+	// The fixture is 1s and mpv is idle, so it survives to report the end.
+	ev := awaitEvent(t, m, "end-file", 20*time.Second)
+
+	var payload struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(ev.Raw, &payload); err != nil {
+		t.Fatalf("end-file payload: %v", err)
+	}
+	if payload.Reason != "eof" {
+		t.Errorf("reason = %q, want eof", payload.Reason)
+	}
+}
+
+func TestEventsChannelClosesWhenMPVExits(t *testing.T) {
+	m := newTestMPV(t)
+
+	if err := m.Quit(); err != nil {
+		t.Fatalf("quit: %v", err)
+	}
+
+	// Closing the channel is what lets consumers range without a leak.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case _, ok := <-m.Events():
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("event channel was not closed after quit")
+		}
+	}
+}
+
+func TestDoneClosesAndErrIsReadableAfterExit(t *testing.T) {
+	m := newTestMPV(t)
+
+	if err := m.Quit(); err != nil {
+		t.Fatalf("quit: %v", err)
+	}
+
+	select {
+	case <-m.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Done was not closed after quit")
+	}
+
+	// Err is only safe to call after Done; it must not block or panic.
+	_ = m.Err()
+}
+
+func TestObservePropertyReportsChanges(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	m := newTestMPV(t)
+	if err := m.Play(file); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+
+	// Observation only takes effect on the connection that requests it, so
+	// this fails unless ObserveProperty writes to the listener.
+	if err := m.ObserveProperty("pause"); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+
+	if err := m.Pause(); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+
+	ev := awaitEventWhere(t, m, "property-change",
+		func(ev Event) bool {
+			name, data := decodeChange(t, ev)
+			return name == "pause" && data
+		}, 10*time.Second)
+
+	name, data := decodeChange(t, ev)
+	if name != "pause" {
+		t.Errorf("name = %q, want pause", name)
+	}
+	if !data {
+		t.Error("data = false, want true after pausing")
+	}
+}
+
+func TestObservePropertyReportsUnpauseToo(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	m := newTestMPV(t)
+	if err := m.Play(file); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	if err := m.ObserveProperty("pause"); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+
+	// Both directions must be reported, so that a toggle is observable.
+	if err := m.TogglePause(); err != nil {
+		t.Fatalf("toggle on: %v", err)
+	}
+	awaitEventWhere(t, m, "property-change", func(ev Event) bool {
+		_, data := decodeChange(t, ev)
+		return data
+	}, 10*time.Second)
+
+	if err := m.TogglePause(); err != nil {
+		t.Fatalf("toggle off: %v", err)
+	}
+	awaitEventWhere(t, m, "property-change", func(ev Event) bool {
+		_, data := decodeChange(t, ev)
+		return !data
+	}, 10*time.Second)
+}
+
+func TestObservePropertyFailsWithoutListener(t *testing.T) {
+	// NewMPV never opens a listener, so observing must report the problem
+	// rather than silently doing nothing.
+	m := NewMPV(filepath.Join(t.TempDir(), "mpv.sock"))
+	if err := m.ObserveProperty("pause"); err == nil {
+		t.Error("expected an error when observing without a listener")
+	}
+}
+
+func TestSocketRemovedOnExit(t *testing.T) {
+	m := newTestMPV(t)
+	sock := m.socketPath
+
+	if _, err := os.Stat(sock); err != nil {
+		t.Fatalf("socket should exist while running: %v", err)
+	}
+
+	if err := m.Quit(); err != nil {
+		t.Fatalf("quit: %v", err)
+	}
+	<-m.Done()
+
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Errorf("socket should be removed on exit, stat err = %v", err)
+	}
+}
+
+func TestCommandFailsCleanlyAfterExit(t *testing.T) {
+	m := newTestMPV(t)
+	if err := m.Quit(); err != nil {
+		t.Fatalf("quit: %v", err)
+	}
+	<-m.Done()
+
+	// Must return an error rather than hang or panic.
+	if _, err := m.Command([]any{"get_property", "pause"}); err == nil {
+		t.Error("expected an error when talking to a dead mpv")
+	}
+}
+
+func TestDefaultSocketPathIsPrivateAndUnique(t *testing.T) {
+	pathA, dirA, err := resolveSocketPath("")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	t.Cleanup(func() { cleanupSocketDir(dirA) })
+
+	pathB, dirB, err := resolveSocketPath("")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	t.Cleanup(func() { cleanupSocketDir(dirB) })
+
+	if dirA == dirB {
+		t.Errorf("two instances shared directory %q", dirA)
+	}
+	if pathA == pathB {
+		t.Errorf("two instances shared socket path %q", pathA)
+	}
+	if filepath.Dir(pathA) != dirA {
+		t.Errorf("socket %q is not inside its own directory %q", pathA, dirA)
+	}
+
+	// Anyone able to write the socket can drive mpv, so the directory that
+	// holds it must not be reachable by other users.
+	info, err := os.Stat(dirA)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		t.Errorf("directory mode = %04o, want no group or other access", perm)
+	}
+}
+
+func TestDefaultSocketDirIsRemovedOnQuit(t *testing.T) {
+	m, err := LaunchEmpty("")
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	if m.socketDir == "" {
+		t.Fatal("no private directory was created")
+	}
+	if _, err := os.Stat(filepath.Join(m.socketDir, "mpv.sock")); err != nil {
+		t.Fatalf("socket not created: %v", err)
+	}
+
+	if err := m.Quit(); err != nil {
+		t.Fatalf("quit: %v", err)
+	}
+
+	if _, err := os.Stat(m.socketDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("private directory survived quit: %v", err)
+	}
+}
