@@ -314,7 +314,7 @@ func (m Model) View() string {
 	}
 
 	s += helpStyle.Render(fmt.Sprintf(
-		"  j/k move · enter play · space pause · ←/→ seek %ds · n/p next/prev · s stop · q quit",
+		"  j/k or ↑/↓ move · enter play · space pause · ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit",
 		int(m.cfg.SeekStep.Seconds()),
 	))
 

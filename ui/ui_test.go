@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"codeberg.org/karlokomsic/termelody/player"
 	"codeberg.org/karlokomsic/termelody/playlist"
@@ -57,10 +57,6 @@ func TestConfigDefaults(t *testing.T) {
 func TestArrowsSeekWithoutMovingSelection(t *testing.T) {
 	m := newTestModel(t, Config{})
 
-	// The fixture paths are fake, so loadfile fails and the player stays
-	// stopped, which makes Seek a no-op. That is fine here: the regression
-	// worth guarding is arrows being wired to navigation, which would move
-	// the cursor regardless of playback state.
 	m = m.apply(keyMsg(tea.KeyEnter))
 
 	start := m.cursor
@@ -273,5 +269,47 @@ func TestTickReadsPositionAndReArms(t *testing.T) {
 	}
 	if updated.pos != m.player.Position() {
 		t.Errorf("pos = %s, want %s", updated.pos, m.player.Position())
+	}
+}
+
+func TestUpDownArrowsMoveTheCursor(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	// The arrows were already wired up; only the help bar left them out, so
+	// this guards the claim it now makes.
+	m = m.apply(keyMsg(tea.KeyDown))
+	if m.cursor != 1 {
+		t.Errorf("after down: cursor = %d, want 1", m.cursor)
+	}
+
+	m = m.apply(keyMsg(tea.KeyUp))
+	if m.cursor != 0 {
+		t.Errorf("after up: cursor = %d, want 0", m.cursor)
+	}
+
+	// Bound at both ends, exactly like j and k.
+	m = m.apply(keyMsg(tea.KeyUp))
+	if m.cursor != 0 {
+		t.Errorf("at the top: cursor = %d, want 0", m.cursor)
+	}
+
+	for range len(m.tracks) + 2 {
+		m = m.apply(keyMsg(tea.KeyDown))
+	}
+	if m.cursor != len(m.tracks)-1 {
+		t.Errorf("at the bottom: cursor = %d, want %d", m.cursor, len(m.tracks)-1)
+	}
+}
+
+func TestHelpAdvertisesNavigationKeys(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 100, 24
+
+	out := m.View()
+
+	for _, want := range []string{"j/k or ↑/↓ move", "n/p or >/< next/prev"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help bar does not advertise %q:\n%s", want, out)
+		}
 	}
 }
