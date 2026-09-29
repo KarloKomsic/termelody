@@ -374,3 +374,65 @@ func TestDefaultSocketDirIsRemovedOnQuit(t *testing.T) {
 		t.Errorf("private directory survived quit: %v", err)
 	}
 }
+
+// within runs fn and fails if it does not return promptly, so that a blocking
+// mistake surfaces as a test failure rather than a hung suite.
+func within(t *testing.T, limit time.Duration, fn func()) {
+	t.Helper()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(limit):
+		t.Fatalf("did not finish within %s, so it is almost certainly blocking", limit)
+	}
+}
+
+func TestQuitOnExternallyOwnedClientReturnsInsteadOfPanicking(t *testing.T) {
+	// Nothing is listening, so the command fails. Quit then reaches
+	// terminate, which used to dereference the nil cmd and panic.
+	m := NewMPV(filepath.Join(t.TempDir(), "nobody.sock"))
+
+	var err error
+	within(t, 5*time.Second, func() { err = m.Quit() })
+
+	if err == nil {
+		t.Error("expected an error when nobody is listening")
+	}
+}
+
+func TestErrOnExternallyOwnedClientDoesNotBlock(t *testing.T) {
+	m := NewMPV(filepath.Join(t.TempDir(), "nobody.sock"))
+
+	within(t, 5*time.Second, func() {
+		if err := m.Err(); err != nil {
+			t.Errorf("Err = %v, want nil", err)
+		}
+	})
+}
+
+func TestExternallyOwnedQuitEndsTheOwnedProcess(t *testing.T) {
+	owned, err := LaunchEmpty("")
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	t.Cleanup(func() { _ = owned.Quit() })
+
+	// A second client attaches to the same mpv without owning it, which is
+	// what NewMPV is for. Quitting through it must still work end to end.
+	external := NewMPV(owned.socketPath)
+	if err := external.Quit(); err != nil {
+		t.Fatalf("external quit: %v", err)
+	}
+
+	select {
+	case <-owned.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the owning client never saw mpv exit")
+	}
+}

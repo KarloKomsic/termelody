@@ -1,28 +1,47 @@
 package loader
 
 import (
+	"errors"
+	"fmt"
+
+	"github.com/dhowden/tag"
+
 	"codeberg.org/karlokomsic/termelody/metadata"
 	"codeberg.org/karlokomsic/termelody/playlist"
 	"codeberg.org/karlokomsic/termelody/scanner"
 )
 
-func Load(path string) ([]playlist.Track, error) {
-	tracks, err := scanner.Scan(path)
+// Load discovers the tracks under path and enriches each one with the metadata
+// that can be read from its file.
+//
+// A file with no tags is not treated as a failure: tag.ReadFrom reports
+// ErrNoTagsFound for any file with no recognizable tag block, which is the
+// normal state of plenty of perfectly playable audio, so those tracks are
+// returned with their path alone and reported in neither result.
+//
+// The returned failures hold only what is genuinely wrong, such as a file that
+// cannot be opened or read, so the caller can warn about them while the rest of
+// the library still loads. The error is reserved for the scan itself failing,
+// which means there are no tracks to return at all.
+func Load(path string) (tracks []playlist.Track, failures []error, err error) {
+	tracks, err = scanner.Scan(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("could not scan %s: %w", path, err)
 	}
 
-	// Enrich each discovered Track with whatever metadata
-	// can be read from its file. Tracks whose metadata cannot
-	// be read are kept with their path-only information.
 	for i, track := range tracks {
 		loadedTrack, err := metadata.Load(track)
-		if err != nil {
+		if err == nil {
+			tracks[i] = loadedTrack
 			continue
 		}
 
-		tracks[i] = loadedTrack
+		if errors.Is(err, tag.ErrNoTagsFound) {
+			continue
+		}
+
+		failures = append(failures, fmt.Errorf("%s: %w", track.Path, err))
 	}
 
-	return tracks, nil
+	return tracks, failures, nil
 }

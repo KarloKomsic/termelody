@@ -21,10 +21,20 @@ func main() {
 		return
 	}
 
-	tracks, err := loader.Load(dir)
+	tracks, failures, err := loader.Load(dir)
 	if err != nil {
 		fmt.Println(err)
 		return
+	}
+
+	// A few unreadable files should not stop the whole library from
+	// loading, but they should not pass unnoticed either.
+	if len(failures) > 0 {
+		fmt.Fprintf(os.Stderr, "%d of %d tracks could not be read; continuing anyway.\n",
+			len(failures), len(tracks))
+		for _, failure := range failures {
+			fmt.Fprintf(os.Stderr, "  %v\n", failure)
+		}
 	}
 
 	if len(tracks) == 0 {

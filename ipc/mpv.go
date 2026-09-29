@@ -281,14 +281,28 @@ func (m *MPV) Events() <-chan Event {
 	return m.events
 }
 
-// Done is closed once the mpv process has exited.
+// ownsProcess reports whether this client launched the mpv it talks to. A
+// client built with NewMPV attaches to somebody else's instance, so there is
+// no process for it to wait on and nothing for it to tear down. Every method
+// that would block on the exit of that process has to check this first.
+func (m *MPV) ownsProcess() bool {
+	return m.cmd != nil
+}
+
+// Done is closed once the mpv process has exited. Returns nil for clients built
+// with NewMPV, which do not own the process and so cannot observe its exit.
 func (m *MPV) Done() <-chan struct{} {
 	return m.done
 }
 
 // Err reports why mpv exited. It must only be read after Done is closed, since
-// that is what guarantees the value is visible.
+// that is what guarantees the value is visible. Returns nil for clients built
+// with NewMPV, which have no exit of their own to report.
 func (m *MPV) Err() error {
+	if !m.ownsProcess() {
+		return nil
+	}
+
 	<-m.done
 	return m.waitErr
 }
@@ -347,7 +361,9 @@ func (m *MPV) Command(command []any) (any, error) {
 	}
 }
 
-// Quit asks mpv to exit and waits for the process to be reaped.
+// Quit asks mpv to exit and waits for the process to be reaped. A client that
+// does not own the process only sends the command and returns, because it can
+// neither wait for that exit nor undo it.
 func (m *MPV) Quit() error {
 	if _, err := m.Command([]any{"quit"}); err != nil {
 		// mpv may already be gone, in which case shutting down is moot.
@@ -355,6 +371,10 @@ func (m *MPV) Quit() error {
 		// running process and no leftover socket.
 		m.terminate()
 		return err
+	}
+
+	if !m.ownsProcess() {
+		return nil
 	}
 
 	<-m.done
@@ -365,6 +385,10 @@ func (m *MPV) Quit() error {
 // safe to call more than once, which lets both Quit and the startup failure
 // paths clean up after themselves.
 func (m *MPV) terminate() {
+	if !m.ownsProcess() {
+		return
+	}
+
 	select {
 	case <-m.done:
 		return
