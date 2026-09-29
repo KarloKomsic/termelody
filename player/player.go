@@ -157,6 +157,26 @@ func property(ev Event) string {
 	return change.Name
 }
 
+// EndedNaturally reports whether an end-file event says playback reached the
+// end of the file on its own. Checking the reason rather than the event name
+// is what makes this safe: loadfile and stop both emit end-file for the file
+// they interrupt, and counting those as a finished track would skip ahead
+// while the caller is still choosing what plays next. A payload that will not
+// parse counts as "no", because a broken event must not move the playlist.
+func EndedNaturally(ev Event) bool {
+	if ev.Name != "end-file" {
+		return false
+	}
+
+	var payload struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(ev.Raw, &payload); err != nil {
+		return false
+	}
+	return payload.Reason == "eof"
+}
+
 // apply folds a single event into player state.
 func (p *Player) apply(ev Event) {
 	p.mu.Lock()

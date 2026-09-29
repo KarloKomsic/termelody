@@ -313,3 +313,57 @@ func TestHelpAdvertisesNavigationKeys(t *testing.T) {
 		}
 	}
 }
+
+// endFile builds the event mpv sends when a file stops playing, whatever the
+// reason for it stopping.
+func endFile(reason string) eventMsg {
+	return eventMsg(player.Event{
+		Name: "end-file",
+		Raw:  []byte(`{"event":"end-file","reason":"` + reason + `"}`),
+	})
+}
+
+func TestAutoAdvancePlaysTheNextTrack(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	m = m.apply(endFile("eof"))
+
+	if m.cursor != 1 {
+		t.Errorf("cursor = %d, want 1: the next track was not selected", m.cursor)
+	}
+	if m.player.Index() != 1 {
+		t.Errorf("player index = %d, want 1: the next track was not played", m.player.Index())
+	}
+}
+
+func TestAutoAdvanceIgnoresAnInterruptedFile(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	// This is the payload pressing n and pressing s both produce, so a
+	// change here means the playlist jumps ahead on every manual track
+	// change. See ipc.TestInterruptedFileIsNotEOF for where it comes from.
+	m = m.apply(endFile("stop"))
+
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0: an interrupted file advanced the playlist", m.cursor)
+	}
+	if m.player.Index() != 0 {
+		t.Errorf("player index = %d, want 0: an interrupted file advanced the playlist", m.player.Index())
+	}
+}
+
+func TestAutoAdvanceStopsAfterTheLastTrack(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	// Two tracks, so stepping once lands on the last one.
+	m.step(1)
+
+	m = m.apply(endFile("eof"))
+
+	if m.cursor != 1 {
+		t.Errorf("cursor = %d, want 1: the playlist wrapped instead of stopping", m.cursor)
+	}
+	if m.player.Index() != 1 {
+		t.Errorf("player index = %d, want 1: the playlist wrapped instead of stopping", m.player.Index())
+	}
+}

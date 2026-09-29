@@ -29,11 +29,12 @@
 - [x] Centered layout
 - [x] Keybindings
 - [x] Playback position indicator and progress bar
-- [ ] Auto-advance to next track on end
+- [x] Auto-advance to next track on end
 - [ ] Volume control
 - [ ] Configurable seek step via flag or config file
 - [ ] Recursive directory scanning
 - [ ] Scrolling for long playlists
 - [ ] Command-line argument for music directory
+- [ ] If launched with no arguement, TUI menu starts from the $HOME directory so the user can navigate to the directory, once they are done, they press a certain key to put that as the directory in which scanning starts
 - [ ] Shuffle and repeat
 - [ ] Error recovery and reconnection

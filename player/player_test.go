@@ -422,3 +422,30 @@ func TestSwitchingTrackWhilePausedStartsItPlaying(t *testing.T) {
 		t.Errorf("mpv pause = %v, want false: the second track would not play", got)
 	}
 }
+
+func TestEndedNaturally(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   Event
+		want bool
+	}{
+		// reason is verified against a running mpv by
+		// ipc.TestInterruptedFileIsNotEOF: a file replaced by loadfile ends
+		// with "stop", not "eof".
+		{"reached the end", Event{Name: "end-file", Raw: []byte(`{"event":"end-file","reason":"eof"}`)}, true},
+		{"replaced by loadfile", Event{Name: "end-file", Raw: []byte(`{"event":"end-file","reason":"stop"}`)}, false},
+		{"stopped by command", Event{Name: "end-file", Raw: []byte(`{"event":"end-file","reason":"quit"}`)}, false},
+		{"playlist redirect", Event{Name: "end-file", Raw: []byte(`{"event":"end-file","reason":"redirect"}`)}, false},
+		{"playback failed", Event{Name: "end-file", Raw: []byte(`{"event":"end-file","reason":"error","error":"loading failed"}`)}, false},
+		{"unrecognised reason", Event{Name: "end-file", Raw: []byte(`{"event":"end-file","reason":"unknown"}`)}, false},
+		{"no reason field", Event{Name: "end-file", Raw: []byte(`{"event":"end-file"}`)}, false},
+		{"not an end-file", Event{Name: "file-loaded", Raw: []byte(`{"event":"file-loaded","reason":"eof"}`)}, false},
+		{"unparseable payload", Event{Name: "end-file", Raw: []byte(`{not json`)}, false},
+	}
+
+	for _, c := range cases {
+		if got := EndedNaturally(c.ev); got != c.want {
+			t.Errorf("%s: EndedNaturally = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

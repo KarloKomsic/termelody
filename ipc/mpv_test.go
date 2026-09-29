@@ -173,6 +173,42 @@ func TestEndFileReportsEOFReason(t *testing.T) {
 	}
 }
 
+// Auto-advance keys off reason == "eof", so the reason reported for a file
+// that was interrupted rather than finished is what decides whether that
+// check is safe at all. If this ever reports eof, pressing n would skip a
+// track.
+func TestInterruptedFileIsNotEOF(t *testing.T) {
+	long := testFile(t, 30)
+	other := testFile(t, 30)
+	if long == "" || other == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	m := newTestMPV(t)
+	if err := m.Play(long); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	// Waiting for file-loaded means the first file is genuinely playing, so
+	// the load below interrupts it instead of replacing an empty player.
+	awaitEvent(t, m, "file-loaded", 10*time.Second)
+
+	if err := m.Play(other); err != nil {
+		t.Fatalf("play replacement: %v", err)
+	}
+
+	ev := awaitEvent(t, m, "end-file", 10*time.Second)
+
+	var payload struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(ev.Raw, &payload); err != nil {
+		t.Fatalf("end-file payload: %v", err)
+	}
+	if payload.Reason == "eof" {
+		t.Errorf("reason = %q, want anything but eof: an interrupted file is not a finished one", payload.Reason)
+	}
+}
+
 func TestEventsChannelClosesWhenMPVExits(t *testing.T) {
 	m := newTestMPV(t)
 

@@ -148,8 +148,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 
 	case eventMsg:
-		// The player has already folded this event into its state, so all
-		// that is left is to keep listening.
+		// The player has already folded this event into its state, so the
+		// only thing left to decide is whether whatever just ended should
+		// be followed by something else.
+		if player.EndedNaturally(player.Event(msg)) {
+			m.advance()
+		}
 		return m, waitForEvent(m.player)
 
 	case mpvGoneMsg:
@@ -328,6 +332,26 @@ func (m Model) View() string {
 // seek shifts playback by delta, bounded by cfg.SeekStep at the call site.
 func (m *Model) seek(delta time.Duration) {
 	m.player.Seek(delta)
+}
+
+// advance plays the track after the one that ended on its own. It stops at
+// the end of the playlist instead of wrapping: pressing n is a choice the
+// listener made, while looping forever with no repeat toggle is not one they
+// can undo.
+//
+// The cursor is moved to follow playback because it may have been parked
+// elsewhere while the track was playing, and a highlight that disagrees with
+// what is playing is worse than no highlight at all.
+func (m *Model) advance() {
+	if len(m.tracks) == 0 || m.player.Index() >= len(m.tracks)-1 {
+		return
+	}
+
+	if err := m.player.Next(); err != nil {
+		m.mpvErr = err
+		return
+	}
+	m.cursor = m.player.Index()
 }
 
 // step moves the cursor by delta tracks, wrapping at both ends, and plays
