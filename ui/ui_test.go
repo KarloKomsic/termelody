@@ -321,7 +321,7 @@ func TestHelpAdvertisesNavigationKeys(t *testing.T) {
 
 	out := m.View()
 
-	for _, want := range []string{"j/k or ↑/↓ move", "n/p or >/< next/prev"} {
+	for _, want := range []string{"j/k or ↑/↓ move", "g/G top/bottom", "n/p or >/< next/prev"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help bar does not advertise %q:\n%s", want, out)
 		}
@@ -499,5 +499,58 @@ func TestViewShowsAllTracksWhenTheyFit(t *testing.T) {
 	}
 	if got := lipgloss.Height(out); got != m.height {
 		t.Errorf("rendered %d lines, want exactly %d", got, m.height)
+	}
+}
+
+func TestJumpKeysMoveTheCursorToTheEnds(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	m = m.apply(runeMsg('G'))
+	if m.cursor != len(m.tracks)-1 {
+		t.Errorf("after G: cursor = %d, want %d", m.cursor, len(m.tracks)-1)
+	}
+
+	m = m.apply(runeMsg('g'))
+	if m.cursor != 0 {
+		t.Errorf("after g: cursor = %d, want 0", m.cursor)
+	}
+
+	// Jumping is navigation, the same as j and k, so it must not also
+	// decide what plays.
+	if m.player.Index() != 0 {
+		t.Errorf("player index = %d, want 0: jumping should not start a track", m.player.Index())
+	}
+}
+
+func TestJumpToBottomOnAnEmptyPlaylist(t *testing.T) {
+	m := newModelWithTracks(t, Config{}, nil)
+
+	m = m.apply(runeMsg('G'))
+
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 when there are no tracks", m.cursor)
+	}
+}
+
+func TestJumpingMovesTheWindowWithTheCursor(t *testing.T) {
+	m := newModelWithTracks(t, Config{}, manyTracks(200))
+	m.width, m.height = 100, 30
+
+	m = m.apply(runeMsg('G'))
+	out := m.View()
+	if !strings.Contains(out, "track-199") {
+		t.Error("after G the last track is not in the window")
+	}
+	if strings.Contains(out, "track-000") {
+		t.Error("after G the window is still showing the top of the list")
+	}
+
+	m = m.apply(runeMsg('g'))
+	out = m.View()
+	if !strings.Contains(out, "track-000") {
+		t.Error("after g the first track is not in the window")
+	}
+	if strings.Contains(out, "track-199") {
+		t.Error("after g the window is still showing the bottom of the list")
 	}
 }

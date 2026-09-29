@@ -186,6 +186,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor--
 			}
 
+		case "g":
+			m.cursor = 0
+
+		case "G":
+			// Without the guard an empty playlist would put the cursor at
+			// -1, which no render or play would survive.
+			if len(m.tracks) > 0 {
+				m.cursor = len(m.tracks) - 1
+			}
+
 		case "enter":
 			if err := m.player.PlayIndex(m.cursor); err != nil {
 				return m, nil
@@ -318,10 +328,13 @@ func (m Model) View() string {
 		below += errorStyle.Render(fmt.Sprintf("  %v", m.mpvErr)) + "\n"
 	}
 
-	below += helpStyle.Render(fmt.Sprintf(
-		"  j/k or ↑/↓ move · enter play · space pause · ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit",
-		int(m.cfg.SeekStep.Seconds()),
-	))
+	// One Render for both lines so the style's MarginTop is applied to the
+	// block rather than between the lines, and so lipgloss.Height reports
+	// the real cost of the help to the track budget.
+	below += helpStyle.Render(
+		"  j/k or ↑/↓ move · g/G top/bottom · enter play · space pause\n" +
+			fmt.Sprintf("  ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit", int(m.cfg.SeekStep.Seconds())),
+	)
 
 	top, end, indicator := m.trackWindow(above, below)
 
