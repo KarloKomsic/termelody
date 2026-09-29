@@ -1,15 +1,22 @@
 package ui
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"codeberg.org/karlokomsic/termelody/player"
 	"codeberg.org/karlokomsic/termelody/playlist"
 )
+
+// The help bar prints ↑ and ↓ of its own, so an arrow on its own proves
+// nothing about the indicator. Only an arrow followed by a count does.
+var indicatorPattern = regexp.MustCompile(`[↑↓] \d+`)
 
 func keyMsg(k tea.KeyType) tea.KeyMsg {
 	return tea.KeyMsg{Type: k}
@@ -22,16 +29,23 @@ func runeMsg(r rune) tea.KeyMsg {
 func newTestModel(t *testing.T, cfg Config) Model {
 	t.Helper()
 
+	return newModelWithTracks(t, cfg, []playlist.Track{
+		{Path: "/music/SNAP! - The Power.mp3"},
+		{Path: "/music/ZZ Top Sharp Dressed Man.mp3", Artist: "ZZ Top", Title: "Sharp Dressed Man"},
+	})
+}
+
+// newModelWithTracks builds a Model over the given playlist. Nothing is ever
+// played in these tests, so the paths only have to be told apart.
+func newModelWithTracks(t *testing.T, cfg Config, tracks []playlist.Track) Model {
+	t.Helper()
+
 	p, err := player.New()
 	if err != nil {
 		t.Skipf("mpv unavailable: %v", err)
 	}
 	t.Cleanup(func() { p.Close() })
 
-	tracks := []playlist.Track{
-		{Path: "/music/SNAP! - The Power.mp3"},
-		{Path: "/music/ZZ Top Sharp Dressed Man.mp3", Artist: "ZZ Top", Title: "Sharp Dressed Man"},
-	}
 	p.SetPlaylist(tracks)
 
 	return New(p, tracks, cfg)
@@ -365,5 +379,125 @@ func TestAutoAdvanceStopsAfterTheLastTrack(t *testing.T) {
 	}
 	if m.player.Index() != 1 {
 		t.Errorf("player index = %d, want 1: the playlist wrapped instead of stopping", m.player.Index())
+	}
+}
+
+// manyTracks builds a playlist whose labels can be told apart in the render.
+func manyTracks(n int) []playlist.Track {
+	tracks := make([]playlist.Track, n)
+	for i := range tracks {
+		tracks[i] = playlist.Track{Path: fmt.Sprintf("track-%03d.mp3", i)}
+	}
+	return tracks
+}
+
+func TestWindowTop(t *testing.T) {
+	cases := []struct {
+		name                   string
+		cursor, total, visible int
+		want                   int
+	}{
+		{"everything fits", 7, 5, 10, 0},
+		{"at the top", 0, 100, 10, 0},
+		{"near the top", 4, 100, 10, 0},
+		{"in the middle", 50, 100, 10, 45},
+		{"near the end", 98, 100, 10, 90},
+		{"at the end", 99, 100, 10, 90},
+	}
+
+	for _, c := range cases {
+		if got := windowTop(c.cursor, c.total, c.visible); got != c.want {
+			t.Errorf("%s: windowTop(%d, %d, %d) = %d, want %d",
+				c.name, c.cursor, c.total, c.visible, got, c.want)
+		}
+	}
+}
+
+// The whole window exists to keep the cursor on screen, so that is the
+// property worth checking exhaustively rather than at a few points.
+func TestWindowTopAlwaysShowsTheCursor(t *testing.T) {
+	for total := range 60 {
+		for visible := 1; visible <= 25; visible++ {
+			for cursor := range total {
+				top := windowTop(cursor, total, visible)
+				shown := min(visible, total)
+
+				if top < 0 {
+					t.Fatalf("total=%d visible=%d cursor=%d: top = %d, want >= 0",
+						total, visible, cursor, top)
+				}
+				if top+shown > total {
+					t.Fatalf("total=%d visible=%d cursor=%d: window [%d,%d) runs past the end",
+						total, visible, cursor, top, top+shown)
+				}
+				if cursor < top || cursor >= top+shown {
+					t.Fatalf("total=%d visible=%d cursor=%d: window is [%d,%d), cursor is hidden",
+						total, visible, cursor, top, top+shown)
+				}
+			}
+		}
+	}
+}
+
+func TestIndicatorText(t *testing.T) {
+	cases := []struct {
+		top, end, total int
+		want            string
+	}{
+		{0, 10, 100, "↓ 90"},
+		{45, 55, 100, "↑ 45 · ↓ 45"},
+		{90, 100, 100, "↑ 90"},
+	}
+
+	for _, c := range cases {
+		if got := indicatorText(c.top, c.end, c.total); got != c.want {
+			t.Errorf("indicatorText(%d, %d, %d) = %q, want %q",
+				c.top, c.end, c.total, got, c.want)
+		}
+	}
+}
+
+func TestViewWindowsTheTrackList(t *testing.T) {
+	m := newModelWithTracks(t, Config{}, manyTracks(200))
+	m.width, m.height = 100, 30
+	m.cursor = 150
+
+	out := m.View()
+
+	// lipgloss.Place pads a block up to the requested height but never
+	// clips one, so a view one line too tall spills past the terminal
+	// rather than being cut. This is the assertion that catches it.
+	if got := lipgloss.Height(out); got != m.height {
+		t.Errorf("rendered %d lines, want exactly %d", got, m.height)
+	}
+
+	if strings.Contains(out, "track-000") {
+		t.Error("a track far outside the window was rendered, so the list is not being windowed")
+	}
+	if !strings.Contains(out, "track-150") {
+		t.Error("the cursor's own track was not rendered")
+	}
+	if !indicatorPattern.MatchString(out) {
+		t.Error("expected an indicator for the tracks left out")
+	}
+}
+
+func TestViewShowsAllTracksWhenTheyFit(t *testing.T) {
+	m := newModelWithTracks(t, Config{}, manyTracks(20))
+	m.width, m.height = 100, 40
+	m.cursor = 19
+
+	out := m.View()
+
+	for i := range 20 {
+		if !strings.Contains(out, fmt.Sprintf("track-%03d", i)) {
+			t.Errorf("track-%03d missing from a window that has room for all 20", i)
+		}
+	}
+	if indicatorPattern.MatchString(out) {
+		t.Error("nothing is hidden, so there should be no indicator")
+	}
+	if got := lipgloss.Height(out); got != m.height {
+		t.Errorf("rendered %d lines, want exactly %d", got, m.height)
 	}
 }

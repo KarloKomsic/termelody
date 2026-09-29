@@ -33,9 +33,10 @@
 - [ ] Volume control
 - [ ] Configurable seek step via flag or config file
 - [ ] Recursive directory scanning
-- [ ] Scrolling for long playlists
+- [x] Scrolling for long playlists
 - [ ] Command-line argument for music directory
 - [ ] If launched with no arguement, TUI menu starts from the $HOME directory so the user can navigate to the directory, once they are done, they press a certain key to put that as the directory in which scanning starts
+- [ ] Print chosen directory name and amount of tracks in said directory
 - [ ] Shuffle and repeat
 - [ ] Allow configuration from either the config file (manually), OR from the TUI itself
 - [ ] Error recovery and reconnection

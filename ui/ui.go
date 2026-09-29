@@ -36,6 +36,15 @@ var (
 			Foreground(lipgloss.Color("241")).
 			MarginTop(1)
 
+	// The indicator deliberately has no margins. Every other block here
+	// separates itself with MarginTop, and that would add a line the track
+	// budget has not accounted for, pushing the view past the terminal
+	// height -- which lipgloss.Place will happily let happen, since it pads
+	// but never clips.
+	indicatorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			PaddingLeft(2)
+
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("203")).
 			Bold(true).
@@ -300,33 +309,109 @@ func (m Model) View() string {
 		return ""
 	}
 
-	s := titleStyle.Render("Termelody") + "\n\n"
+	above := titleStyle.Render("Termelody") + "\n\n"
 
-	for i, t := range m.tracks {
-		if i == m.cursor {
-			s += selectedStyle.Render("> "+trackLabel(t)) + "\n"
-		} else {
-			s += trackStyle.Render("  "+trackLabel(t)) + "\n"
-		}
-	}
-
-	s += statusStyle.Render(fmt.Sprintf("  [%s]", m.player.State())) + "\n"
-	s += m.progressBar() + "\n"
+	below := statusStyle.Render(fmt.Sprintf("  [%s]", m.player.State())) + "\n"
+	below += m.progressBar() + "\n"
 
 	if m.mpvErr != nil {
-		s += errorStyle.Render(fmt.Sprintf("  %v", m.mpvErr)) + "\n"
+		below += errorStyle.Render(fmt.Sprintf("  %v", m.mpvErr)) + "\n"
 	}
 
-	s += helpStyle.Render(fmt.Sprintf(
+	below += helpStyle.Render(fmt.Sprintf(
 		"  j/k or ↑/↓ move · enter play · space pause · ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit",
 		int(m.cfg.SeekStep.Seconds()),
 	))
+
+	top, end, indicator := m.trackWindow(above, below)
+
+	s := above
+	for i := top; i < end; i++ {
+		if i == m.cursor {
+			s += selectedStyle.Render("> "+trackLabel(m.tracks[i])) + "\n"
+		} else {
+			s += trackStyle.Render("  "+trackLabel(m.tracks[i])) + "\n"
+		}
+	}
+
+	if indicator != "" {
+		s += indicatorStyle.Render(indicator) + "\n"
+	}
+
+	s += below
 
 	if m.width == 0 || m.height == 0 {
 		return s
 	}
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, s)
+}
+
+// trackWindow reports which slice of the track list fits between the fixed
+// chrome, and what to say about anything left out.
+//
+// The budget is counted from the assembled chrome rather than from the sum of
+// its pieces, because joining two blocks with a newline is one line and not
+// two. It has to be exact: lipgloss.Place pads a block up to the requested
+// height but never clips one, so a view that is a single line too tall spills
+// past the bottom of the terminal instead of being cut.
+func (m Model) trackWindow(above, below string) (top, end int, indicator string) {
+	top, end = 0, len(m.tracks)
+
+	if m.width == 0 || m.height == 0 {
+		// The size has not arrived yet, so there is nothing to fit into.
+		return top, end, ""
+	}
+
+	room := m.height - lipgloss.Height(above+below)
+	if len(m.tracks) <= room {
+		return top, end, ""
+	}
+
+	// One of the room's lines goes to the indicator, so the list gets one
+	// fewer. A room too small for that still shows one track, since an empty
+	// playlist view helps nobody.
+	visible := max(1, room-1)
+	top = windowTop(m.cursor, len(m.tracks), visible)
+	end = min(top+visible, len(m.tracks))
+
+	return top, end, indicatorText(top, end, len(m.tracks))
+}
+
+// windowTop returns the first index to show so that the cursor sits near the
+// middle of a window of visible rows. It holds no state: the offset is
+// derived from the cursor every time, so it cannot fall out of sync with the
+// several places that move the cursor.
+func windowTop(cursor, total, visible int) int {
+	if visible >= total {
+		return 0
+	}
+
+	top := cursor - visible/2
+	switch {
+	case top < 0:
+		return 0
+	case top > total-visible:
+		return total - visible
+	default:
+		return top
+	}
+}
+
+// indicatorText describes how many tracks fall outside the window. At either
+// edge one side has nothing to report and is left out, so the line never
+// points a direction that is empty.
+func indicatorText(top, end, total int) string {
+	above, below := top, total-end
+
+	switch {
+	case above > 0 && below > 0:
+		return fmt.Sprintf("↑ %d · ↓ %d", above, below)
+	case above > 0:
+		return fmt.Sprintf("↑ %d", above)
+	default:
+		return fmt.Sprintf("↓ %d", below)
+	}
 }
 
 // seek shifts playback by delta, bounded by cfg.SeekStep at the call site.
