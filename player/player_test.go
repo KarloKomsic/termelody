@@ -383,3 +383,42 @@ func TestMalformedPropertyChangeIsIgnored(t *testing.T) {
 		t.Errorf("duration = %s, want 0", got)
 	}
 }
+
+func TestSwitchingTrackWhilePausedStartsItPlaying(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	p := newTestPlayer(t)
+	p.SetPlaylist(tracks(file, file))
+
+	if err := p.PlayIndex(0); err != nil {
+		t.Fatalf("play first: %v", err)
+	}
+	wantState(t, p, StatePlaying)
+
+	if err := p.Pause(); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	wantState(t, p, StatePaused)
+
+	// mpv preserves pause across loadfile unless told otherwise, so without
+	// --reset-on-next-file this second track loads paused while the status
+	// line still claims it is playing.
+	if err := p.PlayIndex(1); err != nil {
+		t.Fatalf("play second: %v", err)
+	}
+	wantState(t, p, StatePlaying)
+
+	// State() alone would pass even when broken, because file-loaded sets it
+	// to playing unconditionally. What has to be true is what mpv itself
+	// believes, otherwise the track is silent while the UI says otherwise.
+	got, err := p.mpv.GetProperty("pause")
+	if err != nil {
+		t.Fatalf("get pause: %v", err)
+	}
+	if got != false {
+		t.Errorf("mpv pause = %v, want false: the second track would not play", got)
+	}
+}

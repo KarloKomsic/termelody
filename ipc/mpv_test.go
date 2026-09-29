@@ -436,3 +436,54 @@ func TestExternallyOwnedQuitEndsTheOwnedProcess(t *testing.T) {
 		t.Fatal("the owning client never saw mpv exit")
 	}
 }
+
+func TestPauseIsResetWhenTheNextTrackLoads(t *testing.T) {
+	pausedFile := testFile(t, 30)
+	nextFile := testFile(t, 30)
+	if pausedFile == "" || nextFile == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	m, err := LaunchEmpty(filepath.Join(t.TempDir(), "s.sock"))
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	defer m.Quit()
+
+	if err := m.ObserveProperty("pause"); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+
+	if err := m.Play(pausedFile); err != nil {
+		t.Fatalf("play first: %v", err)
+	}
+	// The reset applies at playback start, so the file has to be loaded
+	// before pausing, otherwise the load would clear it again.
+	awaitEvent(t, m, "file-loaded", 10*time.Second)
+
+	if err := m.Pause(); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	awaitEventWhere(t, m, "property-change", func(ev Event) bool {
+		name, data := decodeChange(t, ev)
+		return name == "pause" && data
+	}, 10*time.Second)
+
+	// Loading the next track must clear the pause, otherwise the new track
+	// silently starts paused and nothing in the UI would explain why.
+	if err := m.Play(nextFile); err != nil {
+		t.Fatalf("play next: %v", err)
+	}
+	awaitEventWhere(t, m, "property-change", func(ev Event) bool {
+		name, data := decodeChange(t, ev)
+		return name == "pause" && !data
+	}, 10*time.Second)
+
+	got, err := m.GetProperty("pause")
+	if err != nil {
+		t.Fatalf("get pause: %v", err)
+	}
+	if got != false {
+		t.Errorf("pause = %v, want false after loading the next track", got)
+	}
+}

@@ -147,7 +147,15 @@ func start(requested string, filePath string, idle bool) (*MPV, error) {
 		return nil, fmt.Errorf("could not clear stale socket: %w", err)
 	}
 
-	args := []string{"--input-ipc-server=" + socketPath}
+	// mpv preserves every setting it was given across loadfile by default,
+	// so pausing one track leaves the next one paused as well. This resets
+	// pause when playback of a new file starts, which is the behaviour a
+	// music player wants. It has to be a launch option because mpv only
+	// applies it at playback start, after the new file is ready.
+	args := []string{
+		"--input-ipc-server=" + socketPath,
+		"--reset-on-next-file=pause",
+	}
 	if filePath != "" {
 		args = append(args, filePath)
 	}
