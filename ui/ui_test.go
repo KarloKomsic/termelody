@@ -557,13 +557,43 @@ func TestJumpingMovesTheWindowWithTheCursor(t *testing.T) {
 	}
 }
 
-func TestTitleCountsTheTracks(t *testing.T) {
-	m := newModelWithTracks(t, Config{}, manyTracks(7))
-	m.width, m.height = 100, 24
+func TestTrackCount(t *testing.T) {
+	cases := map[int]string{
+		0: "0 tracks",
+		1: "1 track",
+		2: "2 tracks",
+		7: "7 tracks",
+	}
 
-	const want = "Termelody - 7 tracks"
-	if out := m.View(); !strings.Contains(out, want) {
-		t.Errorf("view does not say %q:\n%s", want, out)
+	for n, want := range cases {
+		if got := trackCount(n); got != want {
+			t.Errorf("trackCount(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestTitleCountsTheTracks(t *testing.T) {
+	cases := []struct {
+		n    int
+		want string
+	}{
+		{7, "Termelody - 7 tracks"},
+		{1, "Termelody - 1 track"},
+	}
+
+	for _, c := range cases {
+		m := newModelWithTracks(t, Config{}, manyTracks(c.n))
+		m.width, m.height = 100, 24
+
+		out := m.View()
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%d tracks: view does not say %q:\n%s", c.n, c.want, out)
+		}
+		// Checked separately because "Termelody - 1 track" is a prefix of
+		// "Termelody - 1 tracks", so a plain Contains would pass either way.
+		if c.n == 1 && strings.Contains(out, "1 tracks") {
+			t.Errorf("a single-track playlist rendered a plural title:\n%s", out)
+		}
 	}
 }
 

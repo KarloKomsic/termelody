@@ -326,7 +326,7 @@ func (m Model) View() string {
 		return ""
 	}
 
-	above := titleStyle.Render(fmt.Sprintf("Termelody - %d tracks", len(m.tracks))) + "\n\n"
+	above := titleStyle.Render("Termelody - "+trackCount(len(m.tracks))) + "\n\n"
 
 	below := statusStyle.Render(fmt.Sprintf("  [%s]", m.player.State())) + "\n"
 
@@ -479,6 +479,15 @@ func (m *Model) step(delta int) {
 
 	m.cursor = next
 	m.player.PlayIndex(next)
+}
+
+// trackCount spells the playlist size out for the title, using the singular
+// for one so the header does not read "1 tracks".
+func trackCount(n int) string {
+	if n == 1 {
+		return fmt.Sprintf("%d track", n)
+	}
+	return fmt.Sprintf("%d tracks", n)
 }
 
 // nowPlayingLabel names the track playback sits on, and reports "" when there
