@@ -32,6 +32,13 @@ var (
 			Foreground(lipgloss.Color("241")).
 			MarginTop(1)
 
+	// Deliberately margin free: it belongs to the state line directly above
+	// it, and a MarginTop here would spend a line the track budget has not
+	// accounted for.
+	nowPlayingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("42")).
+			PaddingLeft(2)
+
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			MarginTop(1)
@@ -319,9 +326,14 @@ func (m Model) View() string {
 		return ""
 	}
 
-	above := titleStyle.Render("Termelody") + "\n\n"
+	above := titleStyle.Render(fmt.Sprintf("Termelody - %d tracks", len(m.tracks))) + "\n\n"
 
 	below := statusStyle.Render(fmt.Sprintf("  [%s]", m.player.State())) + "\n"
+
+	if label := nowPlayingLabel(m.player.State(), m.tracks, m.player.Index()); label != "" {
+		below += nowPlayingStyle.Render("Currently playing: "+label) + "\n"
+	}
+
 	below += m.progressBar() + "\n"
 
 	if m.mpvErr != nil {
@@ -467,6 +479,21 @@ func (m *Model) step(delta int) {
 
 	m.cursor = next
 	m.player.PlayIndex(next)
+}
+
+// nowPlayingLabel names the track playback sits on, and reports "" when there
+// is none. State decides that rather than the index alone, because the index
+// starts at zero and would otherwise announce the first track before anything
+// has ever been played. Paused still counts: a track the listener can resume
+// is still the current one.
+func nowPlayingLabel(state player.State, tracks []playlist.Track, index int) string {
+	if state == player.StateStopped {
+		return ""
+	}
+	if index < 0 || index >= len(tracks) {
+		return ""
+	}
+	return trackLabel(tracks[index])
 }
 
 // trackLabel prefers metadata, falling back to the filename when a file has

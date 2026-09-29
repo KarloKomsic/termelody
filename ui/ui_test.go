@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -552,5 +554,117 @@ func TestJumpingMovesTheWindowWithTheCursor(t *testing.T) {
 	}
 	if strings.Contains(out, "track-199") {
 		t.Error("after g the window is still showing the bottom of the list")
+	}
+}
+
+func TestTitleCountsTheTracks(t *testing.T) {
+	m := newModelWithTracks(t, Config{}, manyTracks(7))
+	m.width, m.height = 100, 24
+
+	const want = "Termelody - 7 tracks"
+	if out := m.View(); !strings.Contains(out, want) {
+		t.Errorf("view does not say %q:\n%s", want, out)
+	}
+}
+
+func TestNowPlayingLabel(t *testing.T) {
+	tracks := []playlist.Track{
+		{Path: "/music/one.mp3"},
+		{Path: "/music/two.mp3", Artist: "ZZ Top", Title: "Sharp Dressed Man"},
+	}
+
+	cases := []struct {
+		name  string
+		state player.State
+		index int
+		want  string
+	}{
+		// The index starts at zero, so stopping is the only honest signal
+		// that nothing has been played yet.
+		{"stopped announces nothing", player.StateStopped, 0, ""},
+		{"playing names the track", player.StatePlaying, 1, "ZZ Top - Sharp Dressed Man"},
+		{"paused still names the track", player.StatePaused, 0, "one"},
+		{"an index past the list is ignored", player.StatePlaying, 2, ""},
+		{"a negative index is ignored", player.StatePlaying, -1, ""},
+	}
+
+	for _, c := range cases {
+		if got := nowPlayingLabel(c.state, tracks, c.index); got != c.want {
+			t.Errorf("%s: nowPlayingLabel = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	if got := nowPlayingLabel(player.StatePlaying, nil, 0); got != "" {
+		t.Errorf("empty playlist: nowPlayingLabel = %q, want empty", got)
+	}
+}
+
+// toneFile builds a short silent WAV so the playback test below does not
+// depend on the gitignored music/ directory. Returns "" when ffmpeg is absent.
+func toneFile(t *testing.T) string {
+	t.Helper()
+
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return ""
+	}
+
+	path := filepath.Join(t.TempDir(), "tone.wav")
+	cmd := exec.Command("ffmpeg",
+		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+		"-t", "5", "-y", path,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg could not build a fixture: %v: %s", err, out)
+	}
+	return path
+}
+
+// wantState polls until the player reports the wanted state, since state is
+// driven by events that arrive shortly after a command.
+func wantState(t *testing.T, p *player.Player, want player.State) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if p.State() == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("state = %s, want %s", p.State(), want)
+}
+
+// The gate on State is what stops the view announcing the first track before
+// anything has been played, so the assertion before playing is the important
+// one: it fails if the gate is ever removed.
+func TestViewNamesTheCurrentlyPlayingTrack(t *testing.T) {
+	path := toneFile(t)
+	if path == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	tracks := []playlist.Track{{Path: path}}
+	m := newModelWithTracks(t, Config{}, tracks)
+	m.width, m.height = 100, 24
+
+	if strings.Contains(m.View(), "Currently playing") {
+		t.Fatal("nothing has been played, but the view already claims a current track")
+	}
+
+	if err := m.player.PlayIndex(0); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	wantState(t, m.player, player.StatePlaying)
+
+	want := "Currently playing: " + trackLabel(tracks[0])
+	out := m.View()
+	if !strings.Contains(out, want) {
+		t.Errorf("view does not say %q:\n%s", want, out)
+	}
+
+	// The line is extra chrome, so the track budget has to give up a line
+	// for it. Nothing else measures the budget while a track is playing.
+	if got := lipgloss.Height(out); got != m.height {
+		t.Errorf("rendered %d lines while playing, want exactly %d", got, m.height)
 	}
 }

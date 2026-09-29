@@ -25,11 +25,6 @@ func main() {
 		return
 	}
 
-	// Say what was actually scanned. The directory may have been named on
-	// the command line or resolved from the default, and an argument that
-	// was quietly misread looks exactly like an empty library otherwise.
-	fmt.Fprintf(os.Stderr, "%s: %d tracks\n", dir, len(tracks))
-
 	// A few unreadable files should not stop the whole library from
 	// loading, but they should not pass unnoticed either.
 	if len(failures) > 0 {
