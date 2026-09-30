@@ -20,11 +20,12 @@ import (
 // returned with their path alone and reported in neither result.
 //
 // The returned failures hold only what is genuinely wrong, such as a file that
-// cannot be opened or read, so the caller can warn about them while the rest of
-// the library still loads. The error is reserved for the scan itself failing,
-// which means there are no tracks to return at all.
+// cannot be opened or read, or a directory beneath path that cannot be listed,
+// so the caller can warn about them while the rest of the library still loads.
+// The error is reserved for the scan itself failing, which means there are no
+// tracks to return at all.
 func Load(path string) (tracks []playlist.Track, failures []error, err error) {
-	tracks, err = scanner.Scan(path)
+	tracks, failures, err = scanner.Scan(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not scan %s: %w", path, err)
 	}
