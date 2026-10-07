@@ -227,6 +227,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "s":
 			m.player.Stop()
+
+		case "+", "=":
+			// = is the same physical key as + without shift.
+			m.changeVolume(1)
+
+		case "-":
+			m.changeVolume(-1)
 		}
 	}
 
@@ -269,6 +276,29 @@ func (m Model) progressBar() string {
 		barLeftStyle.Render(strings.Repeat("━", left))
 
 	return statusStyle.Render(indent+labels+"  ") + bar
+}
+
+// volumeBar renders the state line: the level drawn as a bar beside its exact
+// value. The bar is appended outside the line's style rather than nested
+// inside it, the way progressBar does, so it keeps its own two colours instead
+// of being flattened into the line's foreground. Nesting would also apply the
+// line's MarginTop a second time and spend a row the track budget does not
+// have.
+//
+// One cell covers two and a half percent, so the bar steps every second or
+// third press while the number beside it moves every time. That division is
+// deliberate: the number answers exactly how loud, the bar answers roughly
+// where, and the progress bar above trades precision the same way.
+func (m Model) volumeBar() string {
+	const width = 40
+
+	volume := m.player.Volume()
+	filled, left := barSegments(width, float64(volume)/100)
+
+	return statusStyle.Render(fmt.Sprintf("  [%s] · volume %d%%  ",
+		m.player.State(), volume)) +
+		barDoneStyle.Render(strings.Repeat("━", filled)) +
+		barLeftStyle.Render(strings.Repeat("━", left))
 }
 
 // barSegments splits a bar of the given width into the part already played and
@@ -328,7 +358,9 @@ func (m Model) View() string {
 
 	above := titleStyle.Render("Termelody - "+trackCount(len(m.tracks))) + "\n\n"
 
-	below := statusStyle.Render(fmt.Sprintf("  [%s]", m.player.State())) + "\n"
+	// The level rides on the state line rather than taking a row of its own,
+	// since one more line would be one fewer track on screen.
+	below := m.volumeBar() + "\n"
 
 	if label := nowPlayingLabel(m.player.State(), m.tracks, m.player.Index()); label != "" {
 		below += nowPlayingStyle.Render("Currently playing: "+label) + "\n"
@@ -344,7 +376,7 @@ func (m Model) View() string {
 	// block rather than between the lines, and so lipgloss.Height reports
 	// the real cost of the help to the track budget.
 	below += helpStyle.Render(
-		"  j/k or ↑/↓ move · g/G top/bottom · enter play · space pause\n" +
+		"  j/k or ↑/↓ move · g/G top/bottom · enter play · space pause · +/- volume\n" +
 			fmt.Sprintf("  ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit", int(m.cfg.SeekStep.Seconds())),
 	)
 
@@ -442,6 +474,21 @@ func indicatorText(top, end, total int) string {
 // seek shifts playback by delta, bounded by cfg.SeekStep at the call site.
 func (m *Model) seek(delta time.Duration) {
 	m.player.Seek(delta)
+}
+
+// volumeStep is how far one keypress moves the volume. A terminal repeats a
+// held key at the operating system's repeat rate, which is around thirty a
+// second here, so the step stays small enough that holding one down sweeps
+// rather than jumps, and every press moves by the same amount.
+const volumeStep = 1
+
+// changeVolume moves the volume by one step in the given direction, surfacing
+// a failure the way advance does rather than letting the key quietly do
+// nothing.
+func (m *Model) changeVolume(direction int) {
+	if err := m.player.AdjustVolume(direction * volumeStep); err != nil {
+		m.mpvErr = err
+	}
 }
 
 // advance plays the track after the one that ended on its own. It stops at

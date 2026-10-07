@@ -3,6 +3,7 @@ package player
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -18,6 +19,10 @@ type Event = ipc.Event
 // blocks once it is full rather than dropping, because losing an event such as
 // end-file would silently break auto-advance.
 const stateEventBuffer = 32
+
+// maxVolume is the ceiling in percent. 100 is no amplification, so the level
+// can be lowered freely but never pushed louder than the source.
+const maxVolume = 100
 
 type State int
 
@@ -58,6 +63,7 @@ type Player struct {
 	loaded bool
 	pos    time.Duration
 	dur    time.Duration
+	volume float64
 
 	tracks []playlist.Track
 	index  int
@@ -93,17 +99,45 @@ func NewWithConfig(cfg Config) (*Player, error) {
 	// Position is observed too, but only so it can be stored. mpv reports it
 	// around a dozen times a second, which is far more often than a display
 	// needs to redraw, so it is deliberately not forwarded to consumers.
-	for _, name := range []string{"pause", "time-pos", "duration"} {
+	//
+	// Volume is observed for the same reason as pause: it only arrives when
+	// asked for, and the readout has to report what mpv thinks rather than a
+	// number this process kept for itself.
+	for _, name := range []string{"pause", "time-pos", "duration", "volume"} {
 		if err := mpv.ObserveProperty(name); err != nil {
 			_ = mpv.Quit()
 			return nil, fmt.Errorf("failed to observe %s: %w", name, err)
 		}
 	}
 
+	// volume-max clamps mpv's add command but not an absolute set of the same
+	// property, and volume is only ever changed with add, so this is what
+	// keeps it from being amplified past unity.
+	if err := mpv.SetProperty("volume-max", maxVolume); err != nil {
+		_ = mpv.Quit()
+		return nil, fmt.Errorf("failed to set volume-max: %w", err)
+	}
+
+	// Reading volume rather than starting at mpv's default of 100 keeps the
+	// first report honest. Observing sends the current value too, but only
+	// once the event goroutine below drains it, so a render that beat it
+	// would otherwise claim silence.
+	raw, err := mpv.GetProperty("volume")
+	if err != nil {
+		_ = mpv.Quit()
+		return nil, fmt.Errorf("failed to read volume: %w", err)
+	}
+	volume, ok := raw.(float64)
+	if !ok {
+		_ = mpv.Quit()
+		return nil, fmt.Errorf("volume came back as %T, want a number", raw)
+	}
+
 	p := &Player{
 		mpv:    mpv,
 		events: make(chan Event, stateEventBuffer),
 		state:  StateStopped,
+		volume: volume,
 	}
 
 	go p.watch()
@@ -239,6 +273,14 @@ func (p *Player) applyProperty(raw []byte) {
 
 	case "duration":
 		p.dur = p.seconds(change.Data)
+
+	case "volume":
+		// seconds must not be used here: it drops zero as "unknown", but zero
+		// volume is silence, a perfectly real reading.
+		var v float64
+		if json.Unmarshal(change.Data, &v) == nil {
+			p.volume = v
+		}
 	}
 }
 
@@ -321,6 +363,18 @@ func (p *Player) Stop() error {
 	return p.mpv.Stop()
 }
 
+// AdjustVolume moves the volume by delta percent, where negative lowers it.
+// The change is made inside mpv with add rather than computed here from the
+// last observed value, so a run of quick presses cannot lose a step to a copy
+// that has not caught up yet. volume-max, set when the Player starts, clamps
+// add but not an absolute set, so the level cannot pass maxVolume either.
+func (p *Player) AdjustVolume(delta int) error {
+	if err := p.mpv.AddToProperty("volume", float64(delta)); err != nil {
+		return fmt.Errorf("failed to adjust volume: %w", err)
+	}
+	return nil
+}
+
 // Seek shifts playback by delta, where a negative delta seeks backwards.
 // Seeking with nothing loaded is a no-op, since mpv has no position to move.
 func (p *Player) Seek(delta time.Duration) error {
@@ -367,6 +421,15 @@ func (p *Player) Duration() time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.dur
+}
+
+// Volume returns the current volume in percent as mpv reports it, rounded
+// since the level is presented as a whole number. It is read from the value
+// mpv pushed rather than counted locally, so it cannot drift from reality.
+func (p *Player) Volume() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return int(math.Round(p.volume))
 }
 
 // Progress returns how much of the track has been played, from 0 to 1. It is

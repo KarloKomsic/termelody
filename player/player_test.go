@@ -449,3 +449,132 @@ func TestEndedNaturally(t *testing.T) {
 		}
 	}
 }
+
+// wantVolume polls until the player reports the wanted level, since the value
+// only lands once mpv's report has travelled back through the event goroutine.
+func wantVolume(t *testing.T, p *Player, want int) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if p.Volume() == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("volume = %d, want %d", p.Volume(), want)
+}
+
+// mpvVolume asks mpv directly, bypassing what the Player has cached. Asserting
+// against it is what proves mpv itself enforced a limit rather than this
+// package merely reporting one.
+func mpvVolume(t *testing.T, p *Player) int {
+	t.Helper()
+
+	raw, err := p.mpv.GetProperty("volume")
+	if err != nil {
+		t.Fatalf("get volume: %v", err)
+	}
+	v, ok := raw.(float64)
+	if !ok {
+		t.Fatalf("volume came back as %T, want a number", raw)
+	}
+	return int(v)
+}
+
+// setVolume parks the level somewhere known. An absolute set is used only here
+// to reach the starting point; every volume change the code makes itself goes
+// through add, because volume-max clamps add and nothing else.
+func setVolume(t *testing.T, p *Player, want int) {
+	t.Helper()
+
+	if err := p.mpv.SetProperty("volume", want); err != nil {
+		t.Fatalf("set volume: %v", err)
+	}
+	wantVolume(t, p, want)
+}
+
+// mpv chooses its own starting level from its config, so the assertion is
+// against mpv's answer rather than an assumed default. Starting anywhere else
+// would read as silence, which is what this catches.
+func TestVolumeMatchesMPVAtStartup(t *testing.T) {
+	p := newTestPlayer(t)
+
+	if got, want := p.Volume(), mpvVolume(t, p); got != want {
+		t.Errorf("volume = %d, mpv says %d", got, want)
+	}
+}
+
+func TestAdjustVolumeMovesTheLevel(t *testing.T) {
+	p := newTestPlayer(t)
+	setVolume(t, p, 100)
+
+	if err := p.AdjustVolume(-10); err != nil {
+		t.Fatalf("adjust: %v", err)
+	}
+	wantVolume(t, p, 90)
+
+	if err := p.AdjustVolume(10); err != nil {
+		t.Fatalf("adjust: %v", err)
+	}
+	wantVolume(t, p, 100)
+}
+
+// Pressing a key faster than mpv can report the last one is normal when a key
+// is held down. Reading the level, subtracting, and writing it back would have
+// every one of these five presses start from the same stale 100 and end at 99.
+func TestRapidVolumeAdjustmentsAllLand(t *testing.T) {
+	p := newTestPlayer(t)
+	setVolume(t, p, 100)
+
+	for range 5 {
+		if err := p.AdjustVolume(-1); err != nil {
+			t.Fatalf("adjust: %v", err)
+		}
+	}
+
+	if got := mpvVolume(t, p); got != 95 {
+		t.Errorf("volume = %d after five presses, want 95", got)
+	}
+}
+
+// volume-max is set when the Player starts, and mpv applies it to add but not
+// to an absolute set, so this only holds because volume is never set outright.
+func TestVolumeCannotPassUnity(t *testing.T) {
+	p := newTestPlayer(t)
+	setVolume(t, p, 100)
+
+	if err := p.AdjustVolume(1); err != nil {
+		t.Fatalf("adjust: %v", err)
+	}
+
+	if got := mpvVolume(t, p); got != 100 {
+		t.Errorf("volume = %d, want it stopped at 100", got)
+	}
+}
+
+// Nothing clamps the floor in Go, because mpv treats negative levels as zero.
+// This is the assumption that lets the package stay out of the way.
+func TestVolumeStopsAtSilence(t *testing.T) {
+	p := newTestPlayer(t)
+	setVolume(t, p, 0)
+
+	if err := p.AdjustVolume(-1); err != nil {
+		t.Fatalf("adjust: %v", err)
+	}
+
+	if got := mpvVolume(t, p); got != 0 {
+		t.Errorf("volume = %d, want 0", got)
+	}
+}
+
+// Zero volume is silence, not an unknown reading, so it has to survive the
+// trip through the event that reports it. A value skipped as "unknown" would
+// leave the old level on display while mpv was already silent.
+func TestZeroVolumeIsReported(t *testing.T) {
+	p := newTestPlayer(t)
+	setVolume(t, p, 100)
+	setVolume(t, p, 0)
+
+	wantVolume(t, p, 0)
+}

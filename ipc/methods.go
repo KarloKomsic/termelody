@@ -36,6 +36,14 @@ func (m *MPV) GetProperty(name string) (any, error) {
 	return m.Command([]any{"get_property", name})
 }
 
+// AddToProperty adds delta to an mpv property. The arithmetic happens inside
+// mpv rather than against a value this process has cached, so a run of quick
+// presses cannot lose a step to a copy that has not caught up yet.
+func (m *MPV) AddToProperty(name string, delta float64) error {
+	_, err := m.Command([]any{"add", name, delta})
+	return err
+}
+
 // TogglePause flips the pause state.
 func (m *MPV) TogglePause() error {
 	_, err := m.Command([]any{"cycle", "pause"})

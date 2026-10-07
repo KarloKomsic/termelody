@@ -698,3 +698,111 @@ func TestViewNamesTheCurrentlyPlayingTrack(t *testing.T) {
 		t.Errorf("rendered %d lines while playing, want exactly %d", got, m.height)
 	}
 }
+
+// wantVolume polls until the player reports the wanted level, since the value
+// only lands once mpv's report has travelled back through the event goroutine.
+func wantVolume(t *testing.T, m Model, want int) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.player.Volume() == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("volume = %d, want %d", m.player.Volume(), want)
+}
+
+func TestHelpAdvertisesVolumeKeys(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 100, 24
+
+	if out := m.View(); !strings.Contains(out, "+/- volume") {
+		t.Errorf("help bar does not advertise the volume keys:\n%s", out)
+	}
+}
+
+// The level rides on the state line, which costs the track list a row it would
+// otherwise have, so it has to be there to be worth the space.
+func TestViewShowsTheVolume(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 100, 24
+
+	want := fmt.Sprintf("volume %d%%", m.player.Volume())
+	if out := m.View(); !strings.Contains(out, want) {
+		t.Errorf("view does not show %q:\n%s", want, out)
+	}
+}
+
+// mpv decides where the level starts, so it is read rather than assumed, and
+// the drop below it leaves room for both directions afterwards.
+func TestVolumeKeysAdjustTheLevel(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	start := m.player.Volume()
+	if err := m.player.AdjustVolume(-50); err != nil {
+		t.Fatalf("prime volume: %v", err)
+	}
+	low := max(start-50, 0)
+	wantVolume(t, m, low)
+
+	steps := []struct {
+		key  rune
+		want int
+	}{
+		// = is the same physical key as + without shift, so both spellings
+		// have to reach the player.
+		{'+', low + 1},
+		{'=', low + 2},
+		{'-', low + 1},
+	}
+
+	for _, s := range steps {
+		m = m.apply(runeMsg(s.key))
+		wantVolume(t, m, s.want)
+	}
+}
+
+// lipgloss.Place pads only while it still has room, so a single line wider
+// than the terminal does not clip that line — it sends the whole view flush
+// left. The budget is checked at 80 columns, where the help bar is the
+// longest thing on screen.
+func TestViewFitsAnEightyColumnTerminal(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 80, 24
+
+	for i, line := range strings.Split(strings.TrimRight(m.View(), "\n"), "\n") {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Errorf("line %d is %d wide, overflows %d: %q", i+1, got, m.width, line)
+		}
+	}
+}
+
+// The bar is the glanceable half of the readout, so it has to be on screen and
+// it has to be exactly the width the layout was budgeted for -- any other
+// length pushes the state line past the help bar and reorders the widest line
+// in the block. What it fills to is barSegments' business, which
+// TestBarSegments already holds down.
+func TestVolumeBarIsDrawn(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 80, 24
+
+	var line string
+	for _, l := range strings.Split(m.View(), "\n") {
+		if strings.Contains(l, "· volume") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatal("view has no line carrying the volume")
+	}
+
+	if got := strings.Count(line, "━"); got != 40 {
+		t.Errorf("volume bar is %d cells, want 40:\n%q", got, line)
+	}
+	if !strings.Contains(line, "volume 100%") {
+		t.Errorf("volume line does not carry the exact value:\n%q", line)
+	}
+}

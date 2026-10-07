@@ -30,7 +30,7 @@
 - [x] Keybindings
 - [x] Playback position indicator and progress bar
 - [x] Auto-advance to next track on end
-- [ ] Volume control
+- [x] Volume control
 - [ ] Configurable seek step via flag or config file
 - [x] Recursive directory scanning
 - [x] Scrolling for long playlists

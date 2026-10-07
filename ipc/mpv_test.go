@@ -523,3 +523,89 @@ func TestPauseIsResetWhenTheNextTrackLoads(t *testing.T) {
 		t.Errorf("pause = %v, want false after loading the next track", got)
 	}
 }
+
+// decodeNumberChange reads a property-change whose payload is a number, which
+// decodeChange cannot do because it decodes a boolean.
+func decodeNumberChange(t *testing.T, ev Event) (name string, value float64) {
+	t.Helper()
+
+	var change struct {
+		Name string          `json:"name"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(ev.Raw, &change); err != nil {
+		t.Fatalf("property-change payload: %v", err)
+	}
+	if err := json.Unmarshal(change.Data, &value); err != nil {
+		t.Fatalf("property-change data: %v", err)
+	}
+	return change.Name, value
+}
+
+// Asking for a property makes mpv report its current value before it reports
+// any change, so both reports arrive as the same event name and have to be
+// told apart by reading the value rather than by waiting for a shape.
+func TestObservePropertyReportsVolume(t *testing.T) {
+	m := newTestMPV(t)
+
+	if err := m.SetProperty("volume", 60); err != nil {
+		t.Fatalf("set volume: %v", err)
+	}
+
+	// Observation is scoped to the connection that requests it, so this fails
+	// unless ObserveProperty writes to the listener rather than the socket.
+	if err := m.ObserveProperty("volume"); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+
+	awaitEventWhere(t, m, "property-change", func(ev Event) bool {
+		name, value := decodeNumberChange(t, ev)
+		return name == "volume" && value == 60
+	}, 10*time.Second)
+
+	if err := m.AddToProperty("volume", -10); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	awaitEventWhere(t, m, "property-change", func(ev Event) bool {
+		name, value := decodeNumberChange(t, ev)
+		return name == "volume" && value == 50
+	}, 10*time.Second)
+}
+
+// The value is asked back rather than watched for, so this holds down the
+// arithmetic itself rather than the reporting of it.
+func TestAddToPropertyMovesTheValue(t *testing.T) {
+	m := newTestMPV(t)
+
+	if err := m.SetProperty("volume", 60); err != nil {
+		t.Fatalf("set volume: %v", err)
+	}
+
+	cases := []struct {
+		delta float64
+		want  float64
+	}{
+		{-10, 50},
+		{25, 75},
+		{0, 75},
+	}
+
+	for _, c := range cases {
+		if err := m.AddToProperty("volume", c.delta); err != nil {
+			t.Fatalf("add %v: %v", c.delta, err)
+		}
+
+		raw, err := m.GetProperty("volume")
+		if err != nil {
+			t.Fatalf("get volume: %v", err)
+		}
+		got, ok := raw.(float64)
+		if !ok {
+			t.Fatalf("volume came back as %T, want a number", raw)
+		}
+		if got != c.want {
+			t.Errorf("volume after add %v = %v, want %v", c.delta, got, c.want)
+		}
+	}
+}
