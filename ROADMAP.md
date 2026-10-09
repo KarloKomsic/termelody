@@ -31,7 +31,7 @@
 - [x] Playback position indicator and progress bar
 - [x] Auto-advance to next track on end
 - [x] Volume control
-- [ ] Configurable seek step via flag or config file
+- [x] Configurable seek step via flag or config file
 - [x] Recursive directory scanning
 - [x] Scrolling for long playlists
 - [x] Command-line argument for music directory

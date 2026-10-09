@@ -61,8 +61,10 @@ var (
 	barLeftStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 )
 
-// defaultSeekStep is how far the arrow keys jump when no config overrides it.
-const defaultSeekStep = 5 * time.Second
+// DefaultSeekStep is how far the arrow keys jump when no config overrides it.
+// It is exported because the CLI uses it as the -seek flag's default, so the
+// advertised and the applied step are the same number by construction.
+const DefaultSeekStep = 5 * time.Second
 
 // Config holds tunables for the TUI. The zero value is valid and yields
 // defaults, so callers can start from an empty Config and fill in only what
@@ -75,7 +77,7 @@ type Config struct {
 // withDefaults fills in any options left at their zero value.
 func (c Config) withDefaults() Config {
 	if c.SeekStep <= 0 {
-		c.SeekStep = defaultSeekStep
+		c.SeekStep = DefaultSeekStep
 	}
 	return c
 }

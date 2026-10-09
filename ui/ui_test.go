@@ -60,8 +60,8 @@ func (m Model) apply(msg tea.Msg) Model {
 }
 
 func TestConfigDefaults(t *testing.T) {
-	if got := (Config{}).withDefaults().SeekStep; got != defaultSeekStep {
-		t.Errorf("zero Config SeekStep = %s, want %s", got, defaultSeekStep)
+	if got := (Config{}).withDefaults().SeekStep; got != DefaultSeekStep {
+		t.Errorf("zero Config SeekStep = %s, want %s", got, DefaultSeekStep)
 	}
 
 	// An explicit value must survive rather than being treated as unset.

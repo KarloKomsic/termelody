@@ -1,28 +1,37 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"codeberg.org/karlokomsic/termelody/ui"
 )
 
-func TestScanDir(t *testing.T) {
-	abs := func(p string) string {
-		got, err := filepath.Abs(p)
-		if err != nil {
-			t.Fatalf("resolving %q: %v", p, err)
-		}
-		return got
-	}
+// mustAbs resolves p or fails the test, so table cases can compare against
+// the same absolute paths scanDir produces.
+func mustAbs(t *testing.T, p string) string {
+	t.Helper()
 
+	got, err := filepath.Abs(p)
+	if err != nil {
+		t.Fatalf("resolving %q: %v", p, err)
+	}
+	return got
+}
+
+func TestScanDir(t *testing.T) {
 	cases := []struct {
 		name    string
 		args    []string
 		want    string
 		wantErr bool
 	}{
-		{"no argument falls back to the default", nil, abs(defaultMusicDir), false},
+		{"no argument falls back to the default", nil, mustAbs(t, defaultMusicDir), false},
 		{"an absolute directory is kept", []string{"/music/library"}, "/music/library", false},
-		{"a relative directory is resolved", []string{"library"}, abs("library"), false},
+		{"a relative directory is resolved", []string{"library"}, mustAbs(t, "library"), false},
 		{"a second argument is rejected", []string{"first", "second"}, "", true},
 	}
 
@@ -42,6 +51,52 @@ func TestScanDir(t *testing.T) {
 		}
 		if got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestParseArgs(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     []string
+		wantDir  string
+		wantSeek time.Duration
+		wantErr  bool
+		wantHelp bool
+	}{
+		{"no arguments keeps every default", nil, mustAbs(t, defaultMusicDir), ui.DefaultSeekStep, false, false},
+		{"a directory alone keeps the default seek", []string{"library"}, mustAbs(t, "library"), ui.DefaultSeekStep, false, false},
+		{"the seek flag precedes the directory", []string{"-seek", "10s", "library"}, mustAbs(t, "library"), 10 * time.Second, false, false},
+		{"the seek flag works without a directory", []string{"-seek", "30s"}, mustAbs(t, defaultMusicDir), 30 * time.Second, false, false},
+		{"a malformed duration is rejected", []string{"-seek", "soon"}, "", 0, true, false},
+		{"a non-positive duration is rejected", []string{"-seek", "0s"}, "", 0, true, false},
+		{"two directories are rejected", []string{"first", "second"}, "", 0, true, false},
+		{"help requests usage without an error message", []string{"-h"}, "", 0, true, true},
+	}
+
+	for _, c := range cases {
+		gotDir, gotCfg, err := parseArgs(c.args)
+
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("%s: expected an error, got dir %q", c.name, gotDir)
+				continue
+			}
+			if c.wantHelp && !errors.Is(err, flag.ErrHelp) {
+				t.Errorf("%s: got %v, want flag.ErrHelp", c.name, err)
+			}
+			continue
+		}
+
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if gotDir != c.wantDir {
+			t.Errorf("%s: dir = %q, want %q", c.name, gotDir, c.wantDir)
+		}
+		if gotCfg.SeekStep != c.wantSeek {
+			t.Errorf("%s: SeekStep = %s, want %s", c.name, gotCfg.SeekStep, c.wantSeek)
 		}
 	}
 }

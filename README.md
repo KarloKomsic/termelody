@@ -19,12 +19,20 @@ than assumed from the commands that were sent.
 | Key | Action |
 |---|---|
 | `j` / `k`, `↓` / `↑` | move selection |
-| `←` / `→` | seek 5s back / forward |
+| `←` / `→` | seek back / forward (default 5s) |
 | `enter` | play selected track |
 | `space` | play / pause |
 | `n` / `p`, `>` / `<` | next / previous track |
 | `s` | stop |
 | `q` | quit |
+
+## Usage
+
+```sh
+termelody [-seek duration] [music directory]
+```
+
+- `-seek` — how far `←` / `→` jump, e.g. `-seek 30s` (default `5s`)
 
 ## Goals
 

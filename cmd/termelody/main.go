@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,9 +15,13 @@ import (
 )
 
 func main() {
-	dir, err := scanDir(os.Args[1:])
+	dir, cfg, err := parseArgs(os.Args[1:])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		// flag.ErrHelp means -h already printed the usage, so echoing the
+		// error on top of it would turn a routine request into a failure.
+		if !errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		return
 	}
 
@@ -49,12 +55,6 @@ func main() {
 
 	p.SetPlaylist(tracks)
 
-	// cfg is the single place TUI options get set. The zero value means
-	// "use the defaults", so only overrides need to appear here. Adding a
-	// flag or config file later means parsing it into this struct and
-	// nothing in the ui package changes.
-	cfg := ui.Config{}
-
 	m := ui.New(p, tracks, cfg)
 	pgm := tea.NewProgram(m, tea.WithAltScreen())
 
@@ -68,6 +68,38 @@ func main() {
 		_ = p.Close()
 		os.Exit(1)
 	}
+}
+
+// parseArgs turns the command line into the directory to scan and the TUI
+// configuration. The flag package stops at the first non-flag argument, so
+// whatever it leaves over goes to scanDir unchanged and the music directory
+// stays optional.
+func parseArgs(args []string) (string, ui.Config, error) {
+	flags := flag.NewFlagSet("termelody", flag.ContinueOnError)
+	seek := flags.Duration("seek", ui.DefaultSeekStep, "how far the arrow keys jump, e.g. 10s")
+	flags.Usage = func() {
+		fmt.Fprintf(flags.Output(), "usage: termelody [-seek duration] [music directory]\n")
+		flags.PrintDefaults()
+	}
+
+	if err := flags.Parse(args); err != nil {
+		return "", ui.Config{}, err
+	}
+
+	// Only an explicit -seek can be non-positive, because the flag default is
+	// the positive DefaultSeekStep. ui.Config.withDefaults would quietly swap
+	// such a value back to the default, which hides the user's mistake;
+	// refusing it here reports it instead.
+	if *seek <= 0 {
+		return "", ui.Config{}, fmt.Errorf("-seek must be positive, got %s", *seek)
+	}
+
+	dir, err := scanDir(flags.Args())
+	if err != nil {
+		return "", ui.Config{}, err
+	}
+
+	return dir, ui.Config{SeekStep: *seek}, nil
 }
 
 // defaultMusicDir is what gets scanned when the command line names no
@@ -86,6 +118,6 @@ func scanDir(args []string) (string, error) {
 	case 1:
 		return filepath.Abs(args[0])
 	default:
-		return "", fmt.Errorf("usage: termelody [music directory]")
+		return "", fmt.Errorf("usage: termelody [-seek duration] [music directory]")
 	}
 }
