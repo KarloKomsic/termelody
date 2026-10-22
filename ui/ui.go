@@ -87,6 +87,18 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
+// Help layouts, widest first. fitHelp picks the first that fits, so narrow
+// terminals lose detail instead of silently losing the end of each line.
+const (
+	helpFull = "  j/k or ↑/↓ move · g/G top/bottom · enter play · space pause · +/- volume\n" +
+		"  ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit"
+	helpCompact = "  j/k move · enter play · space pause · +/- vol\n" +
+		"  ←/→ seek %ds · n/p track · s stop · q quit"
+	helpNarrow = "  enter play · space pause\n" +
+		"  ←/→ seek %ds · n/p track\n" +
+		"  +/- vol · s stop · q quit"
+)
+
 // tickInterval is how often the progress readout refreshes. It is far slower
 // than the rate mpv reports position, because a redraw that often buys nothing
 // visible and costs a full repaint of the screen.
@@ -297,13 +309,21 @@ func (m Model) progressBar() string {
 // deliberate: the number answers exactly how loud, the bar answers roughly
 // where, and the progress bar above trades precision the same way.
 func (m Model) volumeBar() string {
-	const width = 40
+	prefix := fmt.Sprintf("  [%s] · volume %d%%  ", m.player.State(), m.player.Volume())
 
-	volume := m.player.Volume()
-	filled, left := barSegments(width, float64(volume)/100)
+	// The bar yields to the terminal before the numbers do: the exact level
+	// is the important half, and a bar squeezed next to it says nothing.
+	width := 40
+	if m.width > 0 {
+		width = min(width, m.width-lipgloss.Width(prefix))
+	}
+	if width < 10 {
+		return statusStyle.Render(strings.TrimRight(prefix, " "))
+	}
 
-	return statusStyle.Render(fmt.Sprintf("  [%s] · volume %d%%  ",
-		m.player.State(), volume)) +
+	filled, left := barSegments(width, float64(m.player.Volume())/100)
+
+	return statusStyle.Render(prefix) +
 		barDoneStyle.Render(strings.Repeat("━", filled)) +
 		barLeftStyle.Render(strings.Repeat("━", left))
 }
@@ -363,38 +383,57 @@ func (m Model) View() string {
 		return ""
 	}
 
-	above := titleStyle.Render("Termelody - "+trackCount(len(m.tracks))) + "\n\n"
+	title := "Termelody - " + trackCount(len(m.tracks))
+	if m.width > 0 {
+		title = fitRight(title, m.width)
+	}
+	above := titleStyle.Render(title) + "\n\n"
 
 	// The level rides on the state line rather than taking a row of its own,
 	// since one more line would be one fewer track on screen.
 	below := m.volumeBar() + "\n"
 
 	if label := nowPlayingLabel(m.player.State(), m.tracks, m.player.Index()); label != "" {
-		below += nowPlayingStyle.Render("Currently playing: "+label) + "\n"
+		text := "Currently playing: " + label
+		if m.width > 0 {
+			text = fitRight(text, max(1, m.width-2))
+		}
+		below += nowPlayingStyle.Render(text) + "\n"
 	}
 
 	below += m.progressBar() + "\n"
 
 	if m.mpvErr != nil {
-		below += errorStyle.Render(fmt.Sprintf("  %v", m.mpvErr)) + "\n"
+		text := fmt.Sprintf("  %v", m.mpvErr)
+		if m.width > 0 {
+			text = fitRight(text, m.width)
+		}
+		below += errorStyle.Render(text) + "\n"
 	}
 
 	// One Render for both lines so the style's MarginTop is applied to the
 	// block rather than between the lines, and so lipgloss.Height reports
 	// the real cost of the help to the track budget.
-	below += helpStyle.Render(
-		"  j/k or ↑/↓ move · g/G top/bottom · enter play · space pause · +/- volume\n" +
-			fmt.Sprintf("  ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit", int(m.cfg.SeekStep.Seconds())),
-	)
+	below += helpStyle.Render(fitHelp(m.width,
+		fmt.Sprintf(helpFull, int(m.cfg.SeekStep.Seconds())),
+		fmt.Sprintf(helpCompact, int(m.cfg.SeekStep.Seconds())),
+		fmt.Sprintf(helpNarrow, int(m.cfg.SeekStep.Seconds())),
+	))
 
 	top, end, indicator := m.trackWindow(above, below)
 
 	s := above
 	for i := top; i < end; i++ {
+		label := trackLabel(m.tracks[i])
+		if m.width > 0 {
+			// Four cells go to padding and the marker.
+			label = fitRight(label, max(1, m.width-4))
+		}
+
 		if i == m.cursor {
-			s += selectedStyle.Render("> "+trackLabel(m.tracks[i])) + "\n"
+			s += selectedStyle.Render("> "+label) + "\n"
 		} else {
-			s += trackStyle.Render("  "+trackLabel(m.tracks[i])) + "\n"
+			s += trackStyle.Render("  "+label) + "\n"
 		}
 	}
 

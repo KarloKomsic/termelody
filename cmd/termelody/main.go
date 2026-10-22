@@ -11,6 +11,7 @@ import (
 
 	"codeberg.org/karlokomsic/termelody/loader"
 	"codeberg.org/karlokomsic/termelody/player"
+	"codeberg.org/karlokomsic/termelody/playlist"
 	"codeberg.org/karlokomsic/termelody/ui"
 )
 
@@ -28,21 +29,42 @@ func main() {
 	// With no directory on the command line there is nothing to scan yet, so
 	// ask before starting a player. Choosing first means a canceled picker
 	// never leaves an mpv process behind.
+	var tracks []playlist.Track
+	var failures []error
+
 	if dir == "" {
-		dir, err = pickDir(cfg)
+		start, notice := "", ""
+		for {
+			dir, err = pickDir(cfg, start, notice)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return
+			}
+			if dir == "" {
+				return
+			}
+
+			tracks, failures, err = loader.Load(dir)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return
+			}
+			if len(tracks) > 0 {
+				break
+			}
+
+			// Reopen on the rejected folder instead of exiting: the usual
+			// cause is a wrong branch, and making the listener navigate back
+			// from $HOME would be the whole cost of the mistake.
+			start = dir
+			notice = fmt.Sprintf("No tracks found in %s.", dir)
+		}
+	} else {
+		tracks, failures, err = loader.Load(dir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return
 		}
-		if dir == "" {
-			return
-		}
-	}
-
-	tracks, failures, err := loader.Load(dir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
 	}
 
 	// A few unreadable files should not stop the whole library from
@@ -85,21 +107,30 @@ func main() {
 }
 
 // pickDir runs the folder browser and returns the chosen directory, or "" when
-// the listener canceled. It is a separate program from the playlist UI because
-// no player exists until this returns: keeping the two apart means the picker
-// cannot touch playback state, and canceling starts nothing.
-func pickDir(cfg ui.Config) (string, error) {
-	start, err := os.UserHomeDir()
-	if err != nil {
-		// Without $HOME the working directory is the only meaningful place
-		// to start, and it is already absolute.
-		start, err = os.Getwd()
+// the listener canceled. An empty start opens at $HOME, with the working
+// directory as a fallback when $HOME is unavailable. notice is shown above the
+// listing to explain why a previous choice was rejected.
+//
+// It is a separate program from the playlist UI because no player exists until
+// this returns: keeping the two apart means the picker cannot touch playback
+// state, and canceling starts nothing.
+func pickDir(cfg ui.Config, start, notice string) (string, error) {
+	if start == "" {
+		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", err
+			// Without $HOME the working directory is the only meaningful
+			// place to start, and it is already absolute.
+			start, err = os.Getwd()
+			if err != nil {
+				return "", err
+			}
+		} else {
+			start = home
 		}
 	}
 
-	final, err := tea.NewProgram(ui.NewPicker(start, cfg), tea.WithAltScreen()).Run()
+	picker := ui.NewPicker(start, cfg).WithNotice(notice)
+	final, err := tea.NewProgram(picker, tea.WithAltScreen()).Run()
 	if err != nil {
 		return "", err
 	}

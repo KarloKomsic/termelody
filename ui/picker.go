@@ -26,6 +26,11 @@ type Picker struct {
 	// showHidden is the current view filter. all keeps every directory so
 	// toggling is a pure re-filter rather than another disk read.
 	showHidden bool
+
+	// notice explains why the picker reopened, such as a folder that held no
+	// tracks. It clears as soon as the listener navigates somewhere else, so
+	// it cannot describe a folder they are no longer looking at.
+	notice string
 }
 
 // dirMsg carries the result of reading a directory. Reaching the filesystem in
@@ -49,6 +54,14 @@ func NewPicker(dir string, cfg Config) Picker {
 	return Picker{dir: dir, showHidden: cfg.ShowHidden}
 }
 
+// WithNotice returns a picker that opens with an explanatory line. It is used
+// when a previous choice was rejected, so the listener sees the reason in the
+// picker instead of losing the UI to a message they cannot act on.
+func (m Picker) WithNotice(notice string) Picker {
+	m.notice = notice
+	return m
+}
+
 // Init implements tea.Model.
 func (m Picker) Init() tea.Cmd {
 	return loadDir(m.dir)
@@ -67,6 +80,12 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Stay where we are: entering a directory that cannot be read
 			// would leave the picker showing nothing and no way back.
 			return m, nil
+		}
+		if msg.dir != m.dir {
+			// The notice described the folder the picker opened on. Moving
+			// elsewhere makes it stale, but the initial load of that same
+			// folder must keep it.
+			m.notice = ""
 		}
 		m.dir = msg.dir
 		m.all = msg.entries
@@ -143,19 +162,42 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// Help layouts, widest first. fitHelp picks the first that fits, so a narrow
+// terminal trades detail for keeping every key visible.
+const (
+	pickerHelpFull = "  j/k or ↑/↓ move · enter open · s scan selected · space scan this folder\n" +
+		"  h back · g/G top/bottom · . toggle dotfolders · q/esc cancel"
+	pickerHelpCompact = "  j/k move · enter open · s scan\n" +
+		"  space scan here · h back · . dotfolders\n" +
+		"  g/G ends · q quit"
+	pickerHelpNarrow = "  enter open · s scan\n" +
+		"  space scan here · h back\n" +
+		"  . dots · q quit"
+)
+
 // View implements tea.Model.
 func (m Picker) View() string {
-	above := titleStyle.Render("Termelody - choose a music directory") + "\n\n"
-	above += trackStyle.Render(m.dir) + "\n\n"
-
-	if m.err != nil {
-		above += errorStyle.Render("  "+m.err.Error()) + "\n\n"
+	title := "Termelody - choose a music directory"
+	path := m.dir
+	if m.width > 0 {
+		title = fitRight(title, m.width)
+		path = fitLeft(path, max(1, m.width-2))
 	}
 
-	below := helpStyle.Render(
-		"  j/k or ↑/↓ move · enter open · s scan selected · space scan this folder\n" +
-			"  h back · g/G top/bottom · . toggle dotfolders · q/esc cancel",
-	)
+	above := titleStyle.Render(title) + "\n\n"
+	above += trackStyle.Render(path) + "\n\n"
+
+	if m.notice != "" {
+		above += errorStyle.Render(m.indented(m.notice)) + "\n\n"
+	}
+
+	if m.err != nil {
+		above += errorStyle.Render(m.indented(m.err.Error())) + "\n\n"
+	}
+
+	below := helpStyle.Render(fitHelp(m.width,
+		pickerHelpFull, pickerHelpCompact, pickerHelpNarrow,
+	))
 
 	top, end, indicator := m.window(above, below)
 
@@ -164,15 +206,25 @@ func (m Picker) View() string {
 	// An error already explains the empty list, so the placeholder would only
 	// add a second, less useful line.
 	if len(m.entries) == 0 && m.err == nil {
-		s += statusStyle.Render("  (no folders here)") + "\n"
+		empty := "  (no folders here)"
+		if m.width > 0 {
+			empty = fitRight(empty, m.width)
+		}
+		s += statusStyle.Render(empty) + "\n"
 	}
 
 	for i := top; i < end; i++ {
-		name := m.entries[i] + "/"
+		name := m.entries[i]
+		if m.width > 0 {
+			// Four cells go to padding and the marker, one to the slash.
+			name = fitRight(name, max(1, m.width-5))
+		}
+
+		label := name + "/"
 		if i == m.cursor {
-			s += selectedStyle.Render("> "+name) + "\n"
+			s += selectedStyle.Render("> "+label) + "\n"
 		} else {
-			s += trackStyle.Render("  "+name) + "\n"
+			s += trackStyle.Render("  "+label) + "\n"
 		}
 	}
 
@@ -187,6 +239,15 @@ func (m Picker) View() string {
 	}
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, s)
+}
+
+// indented renders a diagnostic line, trimming it to the terminal rather than
+// letting the renderer cut it at an arbitrary point.
+func (m Picker) indented(text string) string {
+	if m.width <= 0 {
+		return "  " + text
+	}
+	return "  " + fitRight(text, max(1, m.width-2))
 }
 
 // Chosen reports the directory the listener selected, or "" when the picker

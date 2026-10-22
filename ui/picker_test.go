@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // newTestPicker builds Music/Album and Videos/Clips plus a stray audio file,
@@ -279,6 +280,55 @@ func TestPickerKeepsLocationWhenReadFails(t *testing.T) {
 	}
 	if got := strings.Join(m.entries, ","); got != "Music,Videos" {
 		t.Errorf("entries = %q, want the previous listing", got)
+	}
+}
+
+func TestPickerViewFitsNarrowTerminal(t *testing.T) {
+	_, m := newTestPicker(t)
+	m, _ = m.apply(tea.WindowSizeMsg{Width: 40, Height: 20})
+
+	out := m.View()
+	for i, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if w := lipgloss.Width(line); w > 40 {
+			t.Errorf("line %d is %d wide, overflows 40: %q", i+1, w, line)
+		}
+	}
+
+	// The narrow help keeps the quit key on screen instead of clipping it.
+	if !strings.Contains(out, "q quit") {
+		t.Errorf("narrow view lost the quit hint:\n%s", out)
+	}
+	// The temp root is longer than the line, so the path must be shortened
+	// from the left rather than losing the folder being browsed.
+	if !strings.Contains(out, "…") {
+		t.Errorf("long path was not shortened:\n%s", out)
+	}
+}
+
+func TestPickerNoticeSurvivesInitialLoadAndClearsOnNavigation(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"Next", "Other"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const notice = "No tracks found in /old"
+	m := NewPicker(root, Config{}).WithNotice(notice)
+	m = applyPickerMsg(t, m, m.Init())
+	m.width, m.height = 100, 24
+
+	// Reopening on the rejected folder reads that same folder, which must not
+	// clear the reason it was reopened.
+	if !strings.Contains(m.View(), notice) {
+		t.Errorf("view does not show the notice:\n%s", m.View())
+	}
+
+	m, cmd := m.apply(keyMsg(tea.KeyEnter))
+	m = applyPickerMsg(t, m, cmd)
+
+	if strings.Contains(m.View(), notice) {
+		t.Errorf("notice survived navigating elsewhere:\n%s", m.View())
 	}
 }
 

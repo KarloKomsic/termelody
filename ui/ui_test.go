@@ -779,6 +779,43 @@ func TestViewFitsAnEightyColumnTerminal(t *testing.T) {
 	}
 }
 
+// The same budget has to hold when the terminal is much narrower: the help
+// switches to a compact layout, the volume bar gives up cells, and no line may
+// spill past the width.
+func TestViewFitsANarrowTerminal(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 40, 20
+
+	out := m.View()
+	for i, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Errorf("line %d is %d wide, overflows %d: %q", i+1, got, m.width, line)
+		}
+	}
+
+	if !strings.Contains(out, "q quit") {
+		t.Errorf("narrow view lost the quit hint:\n%s", out)
+	}
+}
+
+func TestViewTruncatesLongTrackLabels(t *testing.T) {
+	long := strings.Repeat("Long ", 20)
+	m := newModelWithTracks(t, Config{}, []playlist.Track{
+		{Path: "/music/long.mp3", Artist: long, Title: long},
+	})
+	m.width, m.height = 40, 20
+
+	out := m.View()
+	if !strings.Contains(out, "…") {
+		t.Errorf("long track label was not shortened:\n%s", out)
+	}
+	for i, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Errorf("line %d is %d wide, overflows %d: %q", i+1, got, m.width, line)
+		}
+	}
+}
+
 // The bar is the glanceable half of the readout, so it has to be on screen and
 // it has to be exactly the width the layout was budgeted for -- any other
 // length pushes the state line past the help bar and reorders the widest line
