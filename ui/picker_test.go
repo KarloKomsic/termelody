@@ -125,6 +125,95 @@ func TestPickerConfigShowsDotDirectoriesFromStart(t *testing.T) {
 	}
 }
 
+func TestPickerListsEntersAndSelectsSymlinkedDirectory(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(target, "Album"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	link := filepath.Join(root, "Linked")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	m := NewPicker(root, Config{})
+	m = applyPickerMsg(t, m, m.Init())
+
+	if got := strings.Join(m.entries, ","); got != "Linked" {
+		t.Fatalf("entries = %q, want %q", got, "Linked")
+	}
+	if !m.links["Linked"] {
+		t.Error("symlinked directory was not recorded as a link")
+	}
+
+	m.width, m.height = 100, 24
+	if !strings.Contains(m.View(), "Linked@") {
+		t.Errorf("view does not mark the symlink with @:\n%s", m.View())
+	}
+
+	m, cmd := m.apply(keyMsg(tea.KeyEnter))
+	m = applyPickerMsg(t, m, cmd)
+
+	// The link path is kept rather than the resolved target, so backing out
+	// returns to where the listener came from.
+	if m.dir != link {
+		t.Fatalf("dir = %q, want the link path %q", m.dir, link)
+	}
+	if got := strings.Join(m.entries, ","); got != "Album" {
+		t.Errorf("entries = %q, want %q", got, "Album")
+	}
+	if m.links["Album"] {
+		t.Error("a real directory inside the target was marked as a link")
+	}
+	if !strings.Contains(m.View(), "Album/") {
+		t.Errorf("view does not use the directory marker for a real folder:\n%s", m.View())
+	}
+
+	m, cmd = m.apply(runeMsg('h'))
+	m = applyPickerMsg(t, m, cmd)
+
+	if m.dir != root {
+		t.Fatalf("after back: dir = %q, want %q", m.dir, root)
+	}
+	if len(m.entries) == 0 || m.entries[m.cursor] != "Linked" {
+		t.Errorf("cursor lost the link after backing out: entries %q, cursor %d", m.entries, m.cursor)
+	}
+
+	m, cmd = m.apply(runeMsg('s'))
+	if m.Chosen() != link {
+		t.Errorf("Chosen() = %q, want %q", m.Chosen(), link)
+	}
+	if _, ok := runCmd(t, cmd).(tea.QuitMsg); !ok {
+		t.Error("selecting should quit the picker")
+	}
+}
+
+func TestPickerSkipsBrokenAndFileSymlinks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "Real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	file := filepath.Join(root, "song.mp3")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "missing"), filepath.Join(root, "Broken")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(file, filepath.Join(root, "FileLink")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	m := NewPicker(root, Config{})
+	m = applyPickerMsg(t, m, m.Init())
+
+	if got := strings.Join(m.entries, ","); got != "Real" {
+		t.Errorf("entries = %q, want only the real directory", got)
+	}
+}
+
 func TestPickerCursorStopsAtBothEnds(t *testing.T) {
 	_, m := newTestPicker(t)
 

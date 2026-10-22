@@ -23,6 +23,11 @@ type Picker struct {
 	chosen   string
 	canceled bool
 
+	// links names the entries that are symlinks, so the view can mark them
+	// without a second stat. It travels with the listing it describes and is
+	// replaced whenever a new directory is read.
+	links map[string]bool
+
 	// showHidden is the current view filter. all keeps every directory so
 	// toggling is a pure re-filter rather than another disk read.
 	showHidden bool
@@ -41,6 +46,8 @@ type dirMsg struct {
 	// entries is every subdirectory, including hidden ones; the picker
 	// applies its own filter so toggling needs no second read.
 	entries []string
+	// links marks which of those entries are symlinks, for the view marker.
+	links map[string]bool
 	// focus names the subdirectory to leave the cursor on once the read
 	// succeeds. Going up would otherwise reset the cursor to the first entry
 	// and lose the listener's place.
@@ -89,6 +96,7 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.dir = msg.dir
 		m.all = msg.entries
+		m.links = msg.links
 		m.entries = m.visibleDirs()
 		m.cursor = focusIndex(m.entries, msg.focus)
 
@@ -220,7 +228,15 @@ func (m Picker) View() string {
 			name = fitRight(name, max(1, m.width-5))
 		}
 
-		label := name + "/"
+		suffix := "/"
+		if m.links[name] {
+			// ls -F marks a symlink with @, and the marker is ASCII, so the
+			// link stays distinguishable even when the icon glyph does not
+			// render.
+			suffix = "@"
+		}
+
+		label := name + suffix
 		if i == m.cursor {
 			s += selectedStyle.Render("> "+label) + "\n"
 		} else {
@@ -301,15 +317,22 @@ func loadDirFocus(dir, focus string) tea.Cmd {
 		}
 
 		names := make([]string, 0, len(entries))
+		links := make(map[string]bool)
 		for _, entry := range entries {
-			// Symlinks are skipped, matching the scanner: following one that
-			// points at an ancestor is how a walk runs forever.
+			full := filepath.Join(dir, entry.Name())
+
 			if entry.IsDir() {
 				names = append(names, entry.Name())
+				continue
+			}
+
+			if isDirSymlink(full, entry) {
+				names = append(names, entry.Name())
+				links[entry.Name()] = true
 			}
 		}
 
-		return dirMsg{dir: dir, entries: names, focus: focus}
+		return dirMsg{dir: dir, entries: names, links: links, focus: focus}
 	}
 }
 
@@ -328,6 +351,23 @@ func (m Picker) visibleDirs() []string {
 		}
 	}
 	return out
+}
+
+// isDirSymlink reports whether entry is a link to a directory. DirEntry.IsDir
+// is false for a link, so without this a symlinked music folder would be
+// invisible even though the scanner follows one when it is the chosen root.
+// Stat follows the link, which also filters out broken links and links to
+// files: offering those would only lead to a scan with nothing to read.
+//
+// Navigation stays lexical and the scanner still refuses to descend symlinked
+// subdirectories, so a link pointing at an ancestor cannot make a scan loop.
+func isDirSymlink(path string, entry os.DirEntry) bool {
+	if entry.Type()&os.ModeSymlink == 0 {
+		return false
+	}
+
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // focusIndex returns the position of name, or the first entry when it is

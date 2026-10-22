@@ -36,9 +36,10 @@ termelody [-seek duration] [music directory]
 - `-hidden` — start the folder picker with dot-directories shown
 - With no music directory, a folder picker opens at `$HOME`; only folders are
   listed. Dot-directories are hidden by default; `.` toggles them in the picker.
-  `s` scans the highlighted folder, `space` the one being browsed. Choosing a
-  folder with no supported audio reopens the picker with a notice, so another
-  folder can be picked without relaunching.
+  Symlinked folders are listed and marked with `@`; broken links and links to
+  files are ignored. `s` scans the highlighted folder, `space` the one being
+  browsed. Choosing a folder with no supported audio reopens the picker with a
+  notice, so another folder can be picked without relaunching.
 
 ### Picker controls
 
