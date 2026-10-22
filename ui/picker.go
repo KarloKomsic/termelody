@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -13,6 +14,7 @@ import (
 // and embedding the browser would give Model a state it can never return from.
 type Picker struct {
 	dir      string
+	all      []string
 	entries  []string
 	cursor   int
 	width    int
@@ -20,13 +22,19 @@ type Picker struct {
 	err      error
 	chosen   string
 	canceled bool
+
+	// showHidden is the current view filter. all keeps every directory so
+	// toggling is a pure re-filter rather than another disk read.
+	showHidden bool
 }
 
 // dirMsg carries the result of reading a directory. Reaching the filesystem in
 // Update would block the TUI, so the read runs as a tea.Cmd like every other
 // side effect.
 type dirMsg struct {
-	dir     string
+	dir string
+	// entries is every subdirectory, including hidden ones; the picker
+	// applies its own filter so toggling needs no second read.
 	entries []string
 	// focus names the subdirectory to leave the cursor on once the read
 	// succeeds. Going up would otherwise reset the cursor to the first entry
@@ -37,8 +45,8 @@ type dirMsg struct {
 
 // NewPicker returns a picker starting in dir. The directory is not read until
 // Init, so constructing one stays free of I/O.
-func NewPicker(dir string) Picker {
-	return Picker{dir: dir}
+func NewPicker(dir string, cfg Config) Picker {
+	return Picker{dir: dir, showHidden: cfg.ShowHidden}
 }
 
 // Init implements tea.Model.
@@ -61,8 +69,9 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.dir = msg.dir
-		m.entries = msg.entries
-		m.cursor = focusIndex(msg.entries, msg.focus)
+		m.all = msg.entries
+		m.entries = m.visibleDirs()
+		m.cursor = focusIndex(m.entries, msg.focus)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -103,6 +112,18 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = len(m.entries) - 1
 			}
 
+		case ".":
+			// Keep the cursor on the same folder across the toggle, and let
+			// focusIndex fall back to the top when that folder just vanished
+			// from view.
+			selected := ""
+			if len(m.entries) > 0 {
+				selected = m.entries[m.cursor]
+			}
+			m.showHidden = !m.showHidden
+			m.entries = m.visibleDirs()
+			m.cursor = focusIndex(m.entries, selected)
+
 		case "enter":
 			if len(m.entries) == 0 {
 				return m, nil
@@ -133,7 +154,7 @@ func (m Picker) View() string {
 
 	below := helpStyle.Render(
 		"  j/k or ↑/↓ move · enter open · s scan selected · space scan this folder\n" +
-			"  h back · g/G top/bottom · q/esc cancel",
+			"  h back · g/G top/bottom · . toggle dotfolders · q/esc cancel",
 	)
 
 	top, end, indicator := m.window(above, below)
@@ -229,6 +250,23 @@ func loadDirFocus(dir, focus string) tea.Cmd {
 
 		return dirMsg{dir: dir, entries: names, focus: focus}
 	}
+}
+
+// visibleDirs filters the loaded listing down to what the current setting lets
+// through. Hidden entries stay in all, so toggling never needs another read
+// and cannot race a directory change.
+func (m Picker) visibleDirs() []string {
+	if m.showHidden {
+		return m.all
+	}
+
+	out := make([]string, 0, len(m.all))
+	for _, name := range m.all {
+		if !strings.HasPrefix(name, ".") {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // focusIndex returns the position of name, or the first entry when it is

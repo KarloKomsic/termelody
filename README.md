@@ -33,8 +33,10 @@ termelody [-seek duration] [music directory]
 ```
 
 - `-seek` — how far `←` / `→` jump, e.g. `-seek 30s` (default `5s`)
+- `-hidden` — start the folder picker with dot-directories shown
 - With no music directory, a folder picker opens at `$HOME`; only folders are
-  listed. `s` scans the highlighted folder, `space` the one being browsed.
+  listed. Dot-directories are hidden by default; `.` toggles them in the picker.
+  `s` scans the highlighted folder, `space` the one being browsed.
 
 ### Picker controls
 
@@ -46,6 +48,7 @@ termelody [-seek duration] [music directory]
 | `g` / `G` | top / bottom |
 | `s` | scan the highlighted folder |
 | `space` | scan the current folder |
+| `.` | show / hide dot-directories |
 | `q`, `esc` | cancel |
 
 ## Goals

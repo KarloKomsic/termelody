@@ -15,7 +15,7 @@ func newTestPicker(t *testing.T) (string, Picker) {
 	t.Helper()
 
 	root := t.TempDir()
-	for _, dir := range []string{"Music/Album", "Videos/Clips"} {
+	for _, dir := range []string{".config/nvim", ".local/share", "Music/Album", "Videos/Clips"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
 			t.Fatalf("creating %s: %v", dir, err)
 		}
@@ -24,7 +24,7 @@ func newTestPicker(t *testing.T) (string, Picker) {
 		t.Fatalf("creating file: %v", err)
 	}
 
-	m := NewPicker(root)
+	m := NewPicker(root, Config{})
 	m = applyPickerMsg(t, m, m.Init())
 
 	return root, m
@@ -57,12 +57,70 @@ func TestPickerListsOnlyDirectories(t *testing.T) {
 	_, m := newTestPicker(t)
 
 	// os.ReadDir sorts by name, so the order is predictable without a sort
-	// of our own.
+	// of our own. Dot-directories exist in the tree but stay hidden by
+	// default.
 	if got := strings.Join(m.entries, ","); got != "Music,Videos" {
 		t.Errorf("entries = %q, want %q", got, "Music,Videos")
 	}
 	if m.cursor != 0 {
 		t.Errorf("cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestPickerToggleShowsDotDirectories(t *testing.T) {
+	_, m := newTestPicker(t)
+
+	m, _ = m.apply(runeMsg('.'))
+	if got := strings.Join(m.entries, ","); got != ".config,.local,Music,Videos" {
+		t.Errorf("after toggle: entries = %q, want dot-directories too", got)
+	}
+	// Music was selected before the toggle and must remain selected after it.
+	if m.cursor != 2 {
+		t.Errorf("after toggle: cursor = %d, want 2 (Music)", m.cursor)
+	}
+
+	m, _ = m.apply(runeMsg('.'))
+	if got := strings.Join(m.entries, ","); got != "Music,Videos" {
+		t.Errorf("after second toggle: entries = %q, want dot-directories hidden again", got)
+	}
+	if m.cursor != 0 {
+		t.Errorf("after second toggle: cursor = %d, want 0 (Music)", m.cursor)
+	}
+}
+
+func TestPickerToggleHidingSelectedDotDirectoryFallsBackToTop(t *testing.T) {
+	_, m := newTestPicker(t)
+
+	m, _ = m.apply(runeMsg('.'))
+	m, _ = m.apply(runeMsg('g'))
+	if m.entries[m.cursor] != ".config" {
+		t.Fatalf("cursor = %q, want .config", m.entries[m.cursor])
+	}
+
+	m, _ = m.apply(runeMsg('.'))
+
+	if len(m.entries) == 0 || m.entries[m.cursor] != "Music" {
+		t.Errorf("cursor = %q, want the first visible folder after hiding", m.entries[m.cursor])
+	}
+	if strings.Contains(strings.Join(m.entries, ","), ".config") {
+		t.Errorf("entries = %q, want dot-directories hidden", strings.Join(m.entries, ","))
+	}
+}
+
+func TestPickerConfigShowsDotDirectoriesFromStart(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "Music"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewPicker(root, Config{ShowHidden: true})
+	m = applyPickerMsg(t, m, m.Init())
+
+	if got := strings.Join(m.entries, ","); got != ".config,Music" {
+		t.Errorf("entries = %q, want %q", got, ".config,Music")
 	}
 }
 
@@ -178,7 +236,7 @@ func TestPickerSpaceScansCurrentDirectory(t *testing.T) {
 }
 
 func TestPickerSelectDoesNothingWithoutEntries(t *testing.T) {
-	m := NewPicker("/music")
+	m := NewPicker("/music", Config{})
 
 	m, cmd := m.apply(runeMsg('s'))
 
@@ -192,7 +250,7 @@ func TestPickerSelectDoesNothingWithoutEntries(t *testing.T) {
 
 func TestPickerCancelQuits(t *testing.T) {
 	for _, key := range []tea.KeyMsg{runeMsg('q'), keyMsg(tea.KeyEsc), keyMsg(tea.KeyCtrlC)} {
-		m := NewPicker("/music")
+		m := NewPicker("/music", Config{})
 
 		m, cmd := m.apply(key)
 

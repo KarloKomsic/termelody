@@ -57,21 +57,23 @@ func TestScanDir(t *testing.T) {
 
 func TestParseArgs(t *testing.T) {
 	cases := []struct {
-		name     string
-		args     []string
-		wantDir  string
-		wantSeek time.Duration
-		wantErr  bool
-		wantHelp bool
+		name       string
+		args       []string
+		wantDir    string
+		wantSeek   time.Duration
+		wantHidden bool
+		wantErr    bool
+		wantHelp   bool
 	}{
-		{"no arguments leaves the directory to the picker", nil, "", ui.DefaultSeekStep, false, false},
-		{"a directory alone keeps the default seek", []string{"library"}, mustAbs(t, "library"), ui.DefaultSeekStep, false, false},
-		{"the seek flag precedes the directory", []string{"-seek", "10s", "library"}, mustAbs(t, "library"), 10 * time.Second, false, false},
-		{"the seek flag works without a directory", []string{"-seek", "30s"}, "", 30 * time.Second, false, false},
-		{"a malformed duration is rejected", []string{"-seek", "soon"}, "", 0, true, false},
-		{"a non-positive duration is rejected", []string{"-seek", "0s"}, "", 0, true, false},
-		{"two directories are rejected", []string{"first", "second"}, "", 0, true, false},
-		{"help requests usage without an error message", []string{"-h"}, "", 0, true, true},
+		{"no arguments leaves the directory to the picker", nil, "", ui.DefaultSeekStep, false, false, false},
+		{"a directory alone keeps the default seek", []string{"library"}, mustAbs(t, "library"), ui.DefaultSeekStep, false, false, false},
+		{"the seek flag precedes the directory", []string{"-seek", "10s", "library"}, mustAbs(t, "library"), 10 * time.Second, false, false, false},
+		{"the seek flag works without a directory", []string{"-seek", "30s"}, "", 30 * time.Second, false, false, false},
+		{"the hidden flag enables dotfolders", []string{"-hidden"}, "", ui.DefaultSeekStep, true, false, false},
+		{"a malformed duration is rejected", []string{"-seek", "soon"}, "", 0, false, true, false},
+		{"a non-positive duration is rejected", []string{"-seek", "0s"}, "", 0, false, true, false},
+		{"two directories are rejected", []string{"first", "second"}, "", 0, false, true, false},
+		{"help requests usage without an error message", []string{"-h"}, "", 0, false, true, true},
 	}
 
 	for _, c := range cases {
@@ -97,6 +99,9 @@ func TestParseArgs(t *testing.T) {
 		}
 		if gotCfg.SeekStep != c.wantSeek {
 			t.Errorf("%s: SeekStep = %s, want %s", c.name, gotCfg.SeekStep, c.wantSeek)
+		}
+		if gotCfg.ShowHidden != c.wantHidden {
+			t.Errorf("%s: ShowHidden = %t, want %t", c.name, gotCfg.ShowHidden, c.wantHidden)
 		}
 	}
 }

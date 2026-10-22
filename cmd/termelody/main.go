@@ -29,7 +29,7 @@ func main() {
 	// ask before starting a player. Choosing first means a canceled picker
 	// never leaves an mpv process behind.
 	if dir == "" {
-		dir, err = pickDir()
+		dir, err = pickDir(cfg)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return
@@ -88,7 +88,7 @@ func main() {
 // the listener canceled. It is a separate program from the playlist UI because
 // no player exists until this returns: keeping the two apart means the picker
 // cannot touch playback state, and canceling starts nothing.
-func pickDir() (string, error) {
+func pickDir(cfg ui.Config) (string, error) {
 	start, err := os.UserHomeDir()
 	if err != nil {
 		// Without $HOME the working directory is the only meaningful place
@@ -99,7 +99,7 @@ func pickDir() (string, error) {
 		}
 	}
 
-	final, err := tea.NewProgram(ui.NewPicker(start), tea.WithAltScreen()).Run()
+	final, err := tea.NewProgram(ui.NewPicker(start, cfg), tea.WithAltScreen()).Run()
 	if err != nil {
 		return "", err
 	}
@@ -122,8 +122,9 @@ func pickDir() (string, error) {
 func parseArgs(args []string) (string, ui.Config, error) {
 	flags := flag.NewFlagSet("termelody", flag.ContinueOnError)
 	seek := flags.Duration("seek", ui.DefaultSeekStep, "how far the arrow keys jump, e.g. 10s")
+	hidden := flags.Bool("hidden", false, "start the folder picker with dot-directories shown")
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "usage: termelody [-seek duration] [music directory]\n")
+		fmt.Fprintf(flags.Output(), "usage: termelody [-seek duration] [-hidden] [music directory]\n")
 		fmt.Fprintln(flags.Output(), "With no music directory, a folder picker opens at $HOME.")
 		flags.PrintDefaults()
 	}
@@ -145,7 +146,7 @@ func parseArgs(args []string) (string, ui.Config, error) {
 		return "", ui.Config{}, err
 	}
 
-	return dir, ui.Config{SeekStep: *seek}, nil
+	return dir, ui.Config{SeekStep: *seek, ShowHidden: *hidden}, nil
 }
 
 // scanDir resolves a directory named on the command line. An empty result

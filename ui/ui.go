@@ -72,6 +72,11 @@ const DefaultSeekStep = 5 * time.Second
 type Config struct {
 	// SeekStep is how many seconds the arrow keys skip forwards or back.
 	SeekStep time.Duration
+
+	// ShowHidden starts the folder picker with dot-directories visible. They
+	// stay hidden by default because $HOME is full of configuration folders
+	// that are never music libraries.
+	ShowHidden bool
 }
 
 // withDefaults fills in any options left at their zero value.
