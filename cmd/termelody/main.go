@@ -25,6 +25,20 @@ func main() {
 		return
 	}
 
+	// With no directory on the command line there is nothing to scan yet, so
+	// ask before starting a player. Choosing first means a canceled picker
+	// never leaves an mpv process behind.
+	if dir == "" {
+		dir, err = pickDir()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		if dir == "" {
+			return
+		}
+	}
+
 	tracks, failures, err := loader.Load(dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -42,7 +56,7 @@ func main() {
 	}
 
 	if len(tracks) == 0 {
-		fmt.Fprintln(os.Stderr, "No tracks found.")
+		fmt.Fprintf(os.Stderr, "No tracks found in %s.\n", dir)
 		return
 	}
 
@@ -70,15 +84,47 @@ func main() {
 	}
 }
 
+// pickDir runs the folder browser and returns the chosen directory, or "" when
+// the listener canceled. It is a separate program from the playlist UI because
+// no player exists until this returns: keeping the two apart means the picker
+// cannot touch playback state, and canceling starts nothing.
+func pickDir() (string, error) {
+	start, err := os.UserHomeDir()
+	if err != nil {
+		// Without $HOME the working directory is the only meaningful place
+		// to start, and it is already absolute.
+		start, err = os.Getwd()
+		if err != nil {
+			return "", err
+		}
+	}
+
+	final, err := tea.NewProgram(ui.NewPicker(start), tea.WithAltScreen()).Run()
+	if err != nil {
+		return "", err
+	}
+
+	picker, ok := final.(ui.Picker)
+	if !ok {
+		return "", fmt.Errorf("picker returned %T, want ui.Picker", final)
+	}
+	if picker.Canceled() {
+		return "", nil
+	}
+	return picker.Chosen(), nil
+}
+
 // parseArgs turns the command line into the directory to scan and the TUI
 // configuration. The flag package stops at the first non-flag argument, so
 // whatever it leaves over goes to scanDir unchanged and the music directory
-// stays optional.
+// stays optional. An empty directory means none was given, so the picker
+// chooses one.
 func parseArgs(args []string) (string, ui.Config, error) {
 	flags := flag.NewFlagSet("termelody", flag.ContinueOnError)
 	seek := flags.Duration("seek", ui.DefaultSeekStep, "how far the arrow keys jump, e.g. 10s")
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "usage: termelody [-seek duration] [music directory]\n")
+		fmt.Fprintln(flags.Output(), "With no music directory, a folder picker opens at $HOME.")
 		flags.PrintDefaults()
 	}
 
@@ -102,19 +148,14 @@ func parseArgs(args []string) (string, ui.Config, error) {
 	return dir, ui.Config{SeekStep: *seek}, nil
 }
 
-// defaultMusicDir is what gets scanned when the command line names no
-// directory. It stays relative so that running termelody from the repository
-// root keeps finding the local music/ folder.
-const defaultMusicDir = "music"
-
-// scanDir resolves which directory to scan: the first argument when one is
-// given, and the default otherwise. Both go through filepath.Abs here so a
-// directory named on the command line and the default are resolved the same
-// way, rather than one being relative to wherever termelody was launched.
+// scanDir resolves a directory named on the command line. An empty result
+// means none was given, which is how the picker becomes the no-argument
+// behavior rather than an implicit default. A named path is made absolute so
+// it does not depend on where termelody was launched.
 func scanDir(args []string) (string, error) {
 	switch len(args) {
 	case 0:
-		return filepath.Abs(defaultMusicDir)
+		return "", nil
 	case 1:
 		return filepath.Abs(args[0])
 	default:

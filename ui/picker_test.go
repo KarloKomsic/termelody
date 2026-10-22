@@ -1,0 +1,223 @@
+package ui
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// newTestPicker builds Music/Album and Videos/Clips plus a stray audio file,
+// then returns a picker on that root with its listing already loaded.
+func newTestPicker(t *testing.T) (string, Picker) {
+	t.Helper()
+
+	root := t.TempDir()
+	for _, dir := range []string{"Music/Album", "Videos/Clips"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatalf("creating %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "song.mp3"), nil, 0o644); err != nil {
+		t.Fatalf("creating file: %v", err)
+	}
+
+	m := NewPicker(root)
+	m = applyPickerMsg(t, m, m.Init())
+
+	return root, m
+}
+
+// apply feeds a message through Update and returns both results, since a
+// navigation key can schedule a directory read.
+func (m Picker) apply(msg tea.Msg) (Picker, tea.Cmd) {
+	updated, cmd := m.Update(msg)
+	return updated.(Picker), cmd
+}
+
+func runCmd(t *testing.T, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+
+	if cmd == nil {
+		t.Fatal("expected a command, got nil")
+	}
+	return cmd()
+}
+
+func applyPickerMsg(t *testing.T, m Picker, cmd tea.Cmd) Picker {
+	t.Helper()
+
+	updated, _ := m.apply(runCmd(t, cmd))
+	return updated
+}
+
+func TestPickerListsOnlyDirectories(t *testing.T) {
+	_, m := newTestPicker(t)
+
+	// os.ReadDir sorts by name, so the order is predictable without a sort
+	// of our own.
+	if got := strings.Join(m.entries, ","); got != "Music,Videos" {
+		t.Errorf("entries = %q, want %q", got, "Music,Videos")
+	}
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestPickerCursorStopsAtBothEnds(t *testing.T) {
+	_, m := newTestPicker(t)
+
+	// Two downward presses against two entries must land on the last one
+	// rather than wrapping or running out of bounds.
+	m, _ = m.apply(runeMsg('j'))
+	m, _ = m.apply(keyMsg(tea.KeyDown))
+	if m.cursor != 1 {
+		t.Errorf("after two downward keys: cursor = %d, want 1", m.cursor)
+	}
+
+	m, _ = m.apply(runeMsg('k'))
+	m, _ = m.apply(keyMsg(tea.KeyUp))
+	if m.cursor != 0 {
+		t.Errorf("after two upward keys: cursor = %d, want 0", m.cursor)
+	}
+
+	m, _ = m.apply(runeMsg('G'))
+	if m.cursor != 1 {
+		t.Errorf("G: cursor = %d, want 1", m.cursor)
+	}
+
+	m, _ = m.apply(runeMsg('g'))
+	if m.cursor != 0 {
+		t.Errorf("g: cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestPickerDescendAndBackKeepsPlace(t *testing.T) {
+	root, m := newTestPicker(t)
+
+	m, _ = m.apply(runeMsg('j'))
+	m, cmd := m.apply(keyMsg(tea.KeyEnter))
+	m = applyPickerMsg(t, m, cmd)
+
+	if want := filepath.Join(root, "Videos"); m.dir != want {
+		t.Fatalf("after enter: dir = %q, want %q", m.dir, want)
+	}
+	if got := strings.Join(m.entries, ","); got != "Clips" {
+		t.Errorf("entries = %q, want %q", got, "Clips")
+	}
+
+	m, cmd = m.apply(runeMsg('h'))
+	m = applyPickerMsg(t, m, cmd)
+
+	if m.dir != root {
+		t.Errorf("after back: dir = %q, want %q", m.dir, root)
+	}
+	if m.cursor != 1 {
+		t.Errorf("after back: cursor = %d, want 1: the folder left should stay selected", m.cursor)
+	}
+}
+
+func TestPickerBackAliases(t *testing.T) {
+	for _, key := range []tea.KeyMsg{runeMsg('h'), keyMsg(tea.KeyLeft), keyMsg(tea.KeyBackspace)} {
+		root, m := newTestPicker(t)
+		m, _ = m.apply(runeMsg('j'))
+
+		m, cmd := m.apply(keyMsg(tea.KeyEnter))
+		m = applyPickerMsg(t, m, cmd)
+
+		m, cmd = m.apply(key)
+		m = applyPickerMsg(t, m, cmd)
+
+		if m.dir != root {
+			t.Errorf("%s: dir = %q, want %q", key.String(), m.dir, root)
+		}
+	}
+}
+
+func TestPickerRootHasNoParent(t *testing.T) {
+	m := Picker{dir: string(filepath.Separator)}
+
+	_, cmd := m.apply(runeMsg('h'))
+	if cmd != nil {
+		t.Error("backing out of the filesystem root should do nothing")
+	}
+}
+
+func TestPickerSelectReturnsChosenDirectory(t *testing.T) {
+	root, m := newTestPicker(t)
+
+	m, cmd := m.apply(runeMsg('s'))
+
+	if m.Chosen() != root {
+		t.Errorf("Chosen() = %q, want %q", m.Chosen(), root)
+	}
+	if m.Canceled() {
+		t.Error("selecting a directory must not count as canceling")
+	}
+	if _, ok := runCmd(t, cmd).(tea.QuitMsg); !ok {
+		t.Error("selecting should quit the picker")
+	}
+}
+
+func TestPickerCancelQuits(t *testing.T) {
+	for _, key := range []tea.KeyMsg{runeMsg('q'), keyMsg(tea.KeyEsc), keyMsg(tea.KeyCtrlC)} {
+		m := NewPicker("/music")
+
+		m, cmd := m.apply(key)
+
+		if !m.Canceled() {
+			t.Errorf("%s: Canceled() = false, want true", key.String())
+		}
+		if m.Chosen() != "" {
+			t.Errorf("%s: Chosen() = %q, want empty", key.String(), m.Chosen())
+		}
+		if _, ok := runCmd(t, cmd).(tea.QuitMsg); !ok {
+			t.Errorf("%s: canceling should quit the picker", key.String())
+		}
+	}
+}
+
+func TestPickerKeepsLocationWhenReadFails(t *testing.T) {
+	root, m := newTestPicker(t)
+
+	m = applyPickerMsg(t, m, loadDir(filepath.Join(root, "missing")))
+
+	if m.err == nil {
+		t.Fatal("expected an error for a missing directory")
+	}
+	if m.dir != root {
+		t.Errorf("dir = %q, want %q: a failed read must not move the picker", m.dir, root)
+	}
+	if got := strings.Join(m.entries, ","); got != "Music,Videos" {
+		t.Errorf("entries = %q, want the previous listing", got)
+	}
+}
+
+func TestPickerViewShowsPathSelectionAndError(t *testing.T) {
+	root, m := newTestPicker(t)
+	m.width, m.height = 80, 24
+
+	out := m.View()
+	if !strings.Contains(out, root) {
+		t.Errorf("view does not show the current directory:\n%s", out)
+	}
+	if !strings.Contains(out, "> Music/") {
+		t.Errorf("view does not mark the selected folder:\n%s", out)
+	}
+	if !strings.Contains(out, "s select this folder") {
+		t.Errorf("view does not document the select key:\n%s", out)
+	}
+
+	missing := filepath.Join(root, "missing")
+	m = applyPickerMsg(t, m, loadDir(missing))
+
+	out = m.View()
+	if !strings.Contains(out, missing) {
+		t.Errorf("view does not show the read error:\n%s", out)
+	}
+	if strings.Contains(out, "(no folders here)") {
+		t.Errorf("view shows the empty placeholder while an error explains it:\n%s", out)
+	}
+}

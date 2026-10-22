@@ -29,7 +29,7 @@ func TestScanDir(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"no argument falls back to the default", nil, mustAbs(t, defaultMusicDir), false},
+		{"no argument leaves the choice to the picker", nil, "", false},
 		{"an absolute directory is kept", []string{"/music/library"}, "/music/library", false},
 		{"a relative directory is resolved", []string{"library"}, mustAbs(t, "library"), false},
 		{"a second argument is rejected", []string{"first", "second"}, "", true},
@@ -64,10 +64,10 @@ func TestParseArgs(t *testing.T) {
 		wantErr  bool
 		wantHelp bool
 	}{
-		{"no arguments keeps every default", nil, mustAbs(t, defaultMusicDir), ui.DefaultSeekStep, false, false},
+		{"no arguments leaves the directory to the picker", nil, "", ui.DefaultSeekStep, false, false},
 		{"a directory alone keeps the default seek", []string{"library"}, mustAbs(t, "library"), ui.DefaultSeekStep, false, false},
 		{"the seek flag precedes the directory", []string{"-seek", "10s", "library"}, mustAbs(t, "library"), 10 * time.Second, false, false},
-		{"the seek flag works without a directory", []string{"-seek", "30s"}, mustAbs(t, defaultMusicDir), 30 * time.Second, false, false},
+		{"the seek flag works without a directory", []string{"-seek", "30s"}, "", 30 * time.Second, false, false},
 		{"a malformed duration is rejected", []string{"-seek", "soon"}, "", 0, true, false},
 		{"a non-positive duration is rejected", []string{"-seek", "0s"}, "", 0, true, false},
 		{"two directories are rejected", []string{"first", "second"}, "", 0, true, false},
