@@ -143,7 +143,7 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.entries = m.visibleDirs()
 			m.cursor = focusIndex(m.entries, selected)
 
-		case "enter":
+		case "enter", "right", "l":
 			if len(m.entries) == 0 {
 				return m, nil
 			}
@@ -165,8 +165,8 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Help layouts, widest first. fitHelp picks the first that fits, so a narrow
 // terminal trades detail for keeping every key visible.
 const (
-	pickerHelpFull = "  j/k or ↑/↓ move · enter open · s scan selected · space scan this folder\n" +
-		"  h back · g/G top/bottom · . toggle dotfolders · q/esc cancel"
+	pickerHelpFull = "  j/k or ↑/↓ move · enter/→/l open · s scan selected · space scan this folder\n" +
+		"  h/← back · g/G top/bottom · . toggle dotfolders · q/esc cancel"
 	pickerHelpCompact = "  j/k move · enter open · s scan\n" +
 		"  space scan here · h back · . dotfolders\n" +
 		"  g/G ends · q quit"

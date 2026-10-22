@@ -195,6 +195,20 @@ func TestPickerBackAliases(t *testing.T) {
 	}
 }
 
+func TestPickerOpenAliases(t *testing.T) {
+	for _, key := range []tea.KeyMsg{keyMsg(tea.KeyEnter), keyMsg(tea.KeyRight), runeMsg('l')} {
+		root, m := newTestPicker(t)
+		m, _ = m.apply(runeMsg('j'))
+
+		m, cmd := m.apply(key)
+		m = applyPickerMsg(t, m, cmd)
+
+		if want := filepath.Join(root, "Videos"); m.dir != want {
+			t.Errorf("%s: dir = %q, want %q", key.String(), m.dir, want)
+		}
+	}
+}
+
 func TestPickerRootHasNoParent(t *testing.T) {
 	m := Picker{dir: string(filepath.Separator)}
 
@@ -280,6 +294,18 @@ func TestPickerKeepsLocationWhenReadFails(t *testing.T) {
 	}
 	if got := strings.Join(m.entries, ","); got != "Music,Videos" {
 		t.Errorf("entries = %q, want the previous listing", got)
+	}
+}
+
+func TestPickerViewFitsEightyColumns(t *testing.T) {
+	_, m := newTestPicker(t)
+	m, _ = m.apply(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	out := m.View()
+	for i, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if w := lipgloss.Width(line); w > 80 {
+			t.Errorf("line %d is %d wide, overflows 80: %q", i+1, w, line)
+		}
 	}
 }
 

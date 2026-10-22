@@ -45,7 +45,7 @@ termelody [-seek duration] [music directory]
 | Key | Action |
 |---|---|
 | `j` / `k`, `↓` / `↑` | move selection |
-| `enter` | open selected folder |
+| `enter`, `→`, `l` | open selected folder |
 | `h`, `←`, `backspace` | go to parent folder |
 | `g` / `G` | top / bottom |
 | `s` | scan the highlighted folder |
