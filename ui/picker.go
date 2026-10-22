@@ -71,6 +71,17 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "s":
+			// s acts on the highlight, not on the folder being browsed: the
+			// listener points at what they want, so the cursor decides.
+			if len(m.entries) == 0 {
+				return m, nil
+			}
+			m.chosen = filepath.Join(m.dir, m.entries[m.cursor])
+			return m, tea.Quit
+
+		case " ":
+			// The current folder is not in its own listing, so it needs a key
+			// of its own; this also makes an empty folder selectable.
 			m.chosen = m.dir
 			return m, tea.Quit
 
@@ -121,8 +132,8 @@ func (m Picker) View() string {
 	}
 
 	below := helpStyle.Render(
-		"  j/k or ↑/↓ move · enter open · h back · s select this folder\n" +
-			"  g/G top/bottom · q/esc cancel",
+		"  j/k or ↑/↓ move · enter open · s scan selected · space scan this folder\n" +
+			"  h back · g/G top/bottom · q/esc cancel",
 	)
 
 	top, end, indicator := m.window(above, below)

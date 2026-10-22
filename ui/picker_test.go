@@ -145,19 +145,48 @@ func TestPickerRootHasNoParent(t *testing.T) {
 	}
 }
 
-func TestPickerSelectReturnsChosenDirectory(t *testing.T) {
+func TestPickerSelectScansHighlightedDirectory(t *testing.T) {
 	root, m := newTestPicker(t)
 
+	// The cursor starts on Music, so that is what s must choose -- not the
+	// root the picker happens to be browsing.
 	m, cmd := m.apply(runeMsg('s'))
 
-	if m.Chosen() != root {
-		t.Errorf("Chosen() = %q, want %q", m.Chosen(), root)
+	want := filepath.Join(root, "Music")
+	if m.Chosen() != want {
+		t.Errorf("Chosen() = %q, want %q", m.Chosen(), want)
 	}
 	if m.Canceled() {
 		t.Error("selecting a directory must not count as canceling")
 	}
 	if _, ok := runCmd(t, cmd).(tea.QuitMsg); !ok {
 		t.Error("selecting should quit the picker")
+	}
+}
+
+func TestPickerSpaceScansCurrentDirectory(t *testing.T) {
+	root, m := newTestPicker(t)
+
+	m, cmd := m.apply(keyMsg(tea.KeySpace))
+
+	if m.Chosen() != root {
+		t.Errorf("Chosen() = %q, want %q", m.Chosen(), root)
+	}
+	if _, ok := runCmd(t, cmd).(tea.QuitMsg); !ok {
+		t.Error("selecting should quit the picker")
+	}
+}
+
+func TestPickerSelectDoesNothingWithoutEntries(t *testing.T) {
+	m := NewPicker("/music")
+
+	m, cmd := m.apply(runeMsg('s'))
+
+	if cmd != nil {
+		t.Error("s with nothing highlighted should not quit")
+	}
+	if m.Chosen() != "" {
+		t.Errorf("Chosen() = %q, want empty", m.Chosen())
 	}
 }
 
@@ -206,7 +235,7 @@ func TestPickerViewShowsPathSelectionAndError(t *testing.T) {
 	if !strings.Contains(out, "> Music/") {
 		t.Errorf("view does not mark the selected folder:\n%s", out)
 	}
-	if !strings.Contains(out, "s select this folder") {
+	if !strings.Contains(out, "s scan selected") {
 		t.Errorf("view does not document the select key:\n%s", out)
 	}
 

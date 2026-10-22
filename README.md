@@ -34,7 +34,7 @@ termelody [-seek duration] [music directory]
 
 - `-seek` — how far `←` / `→` jump, e.g. `-seek 30s` (default `5s`)
 - With no music directory, a folder picker opens at `$HOME`; only folders are
-  listed. `s` scans the folder the picker is in.
+  listed. `s` scans the highlighted folder, `space` the one being browsed.
 
 ### Picker controls
 
@@ -44,7 +44,8 @@ termelody [-seek duration] [music directory]
 | `enter` | open selected folder |
 | `h`, `←`, `backspace` | go to parent folder |
 | `g` / `G` | top / bottom |
-| `s` | scan the current folder |
+| `s` | scan the highlighted folder |
+| `space` | scan the current folder |
 | `q`, `esc` | cancel |
 
 ## Goals
