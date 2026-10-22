@@ -77,12 +77,20 @@ type Config struct {
 	// stay hidden by default because $HOME is full of configuration folders
 	// that are never music libraries.
 	ShowHidden bool
+
+	// Icons selects the glyphs shown before folder and track rows. The zero
+	// value yields IconsUnicode, so a Config that does not mention icons
+	// still renders a set that needs no extra font installed.
+	Icons IconSet
 }
 
 // withDefaults fills in any options left at their zero value.
 func (c Config) withDefaults() Config {
 	if c.SeekStep <= 0 {
 		c.SeekStep = DefaultSeekStep
+	}
+	if c.Icons == "" {
+		c.Icons = IconsUnicode
 	}
 	return c
 }
@@ -424,7 +432,9 @@ func (m Model) View() string {
 
 	s := above
 	for i := top; i < end; i++ {
-		label := trackLabel(m.tracks[i])
+		// The icon is part of the label so one truncation pass keeps the
+		// row within the same budget whether icons are on or off.
+		label := m.cfg.Icons.trackPrefix() + trackLabel(m.tracks[i])
 		if m.width > 0 {
 			// Four cells go to padding and the marker.
 			label = fitRight(label, max(1, m.width-4))

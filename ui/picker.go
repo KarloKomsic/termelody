@@ -28,6 +28,10 @@ type Picker struct {
 	// replaced whenever a new directory is read.
 	links map[string]bool
 
+	// icons is the configured glyph set, resolved when the picker is built so
+	// the view does no validation of its own.
+	icons IconSet
+
 	// showHidden is the current view filter. all keeps every directory so
 	// toggling is a pure re-filter rather than another disk read.
 	showHidden bool
@@ -58,7 +62,8 @@ type dirMsg struct {
 // NewPicker returns a picker starting in dir. The directory is not read until
 // Init, so constructing one stays free of I/O.
 func NewPicker(dir string, cfg Config) Picker {
-	return Picker{dir: dir, showHidden: cfg.ShowHidden}
+	cfg = cfg.withDefaults()
+	return Picker{dir: dir, showHidden: cfg.ShowHidden, icons: cfg.Icons}
 }
 
 // WithNotice returns a picker that opens with an explanatory line. It is used
@@ -223,10 +228,6 @@ func (m Picker) View() string {
 
 	for i := top; i < end; i++ {
 		name := m.entries[i]
-		if m.width > 0 {
-			// Four cells go to padding and the marker, one to the slash.
-			name = fitRight(name, max(1, m.width-5))
-		}
 
 		suffix := "/"
 		if m.links[name] {
@@ -236,7 +237,14 @@ func (m Picker) View() string {
 			suffix = "@"
 		}
 
-		label := name + suffix
+		// The icon and suffix are part of the same string that gets trimmed,
+		// so the row stays inside one width budget for every icon set.
+		label := m.icons.folderPrefix() + name + suffix
+		if m.width > 0 {
+			// Four cells go to padding and the marker.
+			label = fitRight(label, max(1, m.width-4))
+		}
+
 		if i == m.cursor {
 			s += selectedStyle.Render("> "+label) + "\n"
 		} else {

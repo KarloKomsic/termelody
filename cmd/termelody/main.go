@@ -154,8 +154,9 @@ func parseArgs(args []string) (string, ui.Config, error) {
 	flags := flag.NewFlagSet("termelody", flag.ContinueOnError)
 	seek := flags.Duration("seek", ui.DefaultSeekStep, "how far the arrow keys jump, e.g. 10s")
 	hidden := flags.Bool("hidden", false, "start the folder picker with dot-directories shown")
+	icons := flags.String("icons", string(ui.IconsUnicode), "row icons: unicode, nerd (needs a patched font), or none")
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "usage: termelody [-seek duration] [-hidden] [music directory]\n")
+		fmt.Fprintf(flags.Output(), "usage: termelody [-seek duration] [-hidden] [-icons set] [music directory]\n")
 		fmt.Fprintln(flags.Output(), "With no music directory, a folder picker opens at $HOME.")
 		flags.PrintDefaults()
 	}
@@ -172,12 +173,17 @@ func parseArgs(args []string) (string, ui.Config, error) {
 		return "", ui.Config{}, fmt.Errorf("-seek must be positive, got %s", *seek)
 	}
 
+	iconSet, err := ui.ParseIconSet(*icons)
+	if err != nil {
+		return "", ui.Config{}, fmt.Errorf("-icons: %w", err)
+	}
+
 	dir, err := scanDir(flags.Args())
 	if err != nil {
 		return "", ui.Config{}, err
 	}
 
-	return dir, ui.Config{SeekStep: *seek, ShowHidden: *hidden}, nil
+	return dir, ui.Config{SeekStep: *seek, ShowHidden: *hidden, Icons: iconSet}, nil
 }
 
 // scanDir resolves a directory named on the command line. An empty result
@@ -191,6 +197,6 @@ func scanDir(args []string) (string, error) {
 	case 1:
 		return filepath.Abs(args[0])
 	default:
-		return "", fmt.Errorf("usage: termelody [-seek duration] [music directory]")
+		return "", fmt.Errorf("usage: termelody [-seek duration] [-hidden] [-icons set] [music directory]")
 	}
 }

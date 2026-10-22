@@ -68,6 +68,13 @@ func TestConfigDefaults(t *testing.T) {
 	if got := (Config{SeekStep: 30 * time.Second}).withDefaults().SeekStep; got != 30*time.Second {
 		t.Errorf("explicit SeekStep = %s, want 30s", got)
 	}
+
+	if got := (Config{}).withDefaults().Icons; got != IconsUnicode {
+		t.Errorf("zero Config Icons = %q, want %q", got, IconsUnicode)
+	}
+	if got := (Config{Icons: IconsNerd}).withDefaults().Icons; got != IconsNerd {
+		t.Errorf("explicit Icons = %q, want %q", got, IconsNerd)
+	}
 }
 
 func TestArrowsSeekWithoutMovingSelection(t *testing.T) {
@@ -132,6 +139,34 @@ func TestViewShowsConfiguredSeekStep(t *testing.T) {
 
 	if !strings.Contains(out, "seek 10s") {
 		t.Error("expected help bar to advertise the configured seek step")
+	}
+}
+
+func TestViewRendersConfiguredTrackIcons(t *testing.T) {
+	cases := []struct {
+		name     string
+		set      IconSet
+		want     string
+		unwanted string
+	}{
+		{"unicode", IconsUnicode, "♪ SNAP! - The Power", ""},
+		{"nerd", IconsNerd, "\uf001 SNAP! - The Power", "♪ SNAP! - The Power"},
+		{"none", IconsNone, "SNAP! - The Power", "♪ SNAP! - The Power"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := newTestModel(t, Config{Icons: c.set})
+			m.width, m.height = 100, 24
+
+			out := m.View()
+			if !strings.Contains(out, c.want) {
+				t.Errorf("view does not contain %q:\n%s", c.want, out)
+			}
+			if c.unwanted != "" && strings.Contains(out, c.unwanted) {
+				t.Errorf("view still contains %q:\n%s", c.unwanted, out)
+			}
+		})
 	}
 }
 

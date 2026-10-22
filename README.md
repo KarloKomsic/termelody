@@ -29,11 +29,15 @@ than assumed from the commands that were sent.
 ## Usage
 
 ```sh
-termelody [-seek duration] [music directory]
+termelody [-seek duration] [-hidden] [-icons set] [music directory]
 ```
 
 - `-seek` — how far `←` / `→` jump, e.g. `-seek 30s` (default `5s`)
 - `-hidden` — start the folder picker with dot-directories shown
+- `-icons` — glyphs before folder and track rows: `unicode` (`🗀` / `♪`;
+  standard Unicode, no patched font needed), `nerd` (folder and music glyphs
+  from Nerd Fonts, which need a patched terminal font), or `none` (default
+  `unicode`)
 - With no music directory, a folder picker opens at `$HOME`; only folders are
   listed. Dot-directories are hidden by default; `.` toggles them in the picker.
   Symlinked folders are listed and marked with `@`; broken links and links to

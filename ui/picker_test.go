@@ -214,6 +214,40 @@ func TestPickerSkipsBrokenAndFileSymlinks(t *testing.T) {
 	}
 }
 
+func TestPickerRendersConfiguredIconSet(t *testing.T) {
+	cases := []struct {
+		name     string
+		set      IconSet
+		want     string
+		unwanted string
+	}{
+		{"unicode", IconsUnicode, "> \U0001F5C0 Music/", ""},
+		{"nerd", IconsNerd, "\uf07b Music/", "\U0001F5C0 Music/"},
+		{"none", IconsNone, "> Music/", "\U0001F5C0 Music/"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "Music"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			m := NewPicker(root, Config{Icons: c.set})
+			m = applyPickerMsg(t, m, m.Init())
+			m.width, m.height = 80, 24
+
+			out := m.View()
+			if !strings.Contains(out, c.want) {
+				t.Errorf("view does not contain %q:\n%s", c.want, out)
+			}
+			if c.unwanted != "" && strings.Contains(out, c.unwanted) {
+				t.Errorf("view still contains %q:\n%s", c.unwanted, out)
+			}
+		})
+	}
+}
+
 func TestPickerCursorStopsAtBothEnds(t *testing.T) {
 	_, m := newTestPicker(t)
 
@@ -455,7 +489,7 @@ func TestPickerViewShowsPathSelectionAndError(t *testing.T) {
 	if !strings.Contains(out, root) {
 		t.Errorf("view does not show the current directory:\n%s", out)
 	}
-	if !strings.Contains(out, "> Music/") {
+	if !strings.Contains(out, "> \U0001F5C0 Music/") {
 		t.Errorf("view does not mark the selected folder:\n%s", out)
 	}
 	if !strings.Contains(out, "s scan selected") {
