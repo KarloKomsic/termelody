@@ -38,5 +38,6 @@
 - [x] If launched with no argument, TUI menu starts from the $HOME directory so the user can navigate to the directory, once they are done, they press a certain key to put that as the directory in which scanning starts
 - [x] Show how many tracks were loaded, in the TUI title
 - [ ] Shuffle and repeat
-- [ ] Allow configuration from either the config file (manually), OR from the TUI itself
+- [x] Load preferences from a config file
+- [ ] Edit preferences from the TUI
 - [ ] Error recovery and reconnection

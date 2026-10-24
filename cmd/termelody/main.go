@@ -16,7 +16,14 @@ import (
 )
 
 func main() {
-	dir, cfg, err := parseArgs(os.Args[1:])
+	configPath, err := userConfigPath()
+	if err != nil {
+		// The config file is optional, so an unavailable config directory
+		// must not stop playback; defaults and flags still work without it.
+		fmt.Fprintf(os.Stderr, "config: %v; using defaults\n", err)
+	}
+
+	dir, cfg, err := parseArgs(os.Args[1:], configPath)
 	if err != nil {
 		// flag.ErrHelp means -h already printed the usage, so echoing the
 		// error on top of it would turn a routine request into a failure.
@@ -145,18 +152,38 @@ func pickDir(cfg ui.Config, start, notice string) (string, error) {
 	return picker.Chosen(), nil
 }
 
+// userConfigPath is where preferences live: the XDG config directory plus
+// termelody/config. The file itself is optional; a missing one simply means
+// defaults, and the path is still useful in the usage text.
+func userConfigPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "termelody", "config"), nil
+}
+
 // parseArgs turns the command line into the directory to scan and the TUI
-// configuration. The flag package stops at the first non-flag argument, so
-// whatever it leaves over goes to scanDir unchanged and the music directory
-// stays optional. An empty directory means none was given, so the picker
-// chooses one.
-func parseArgs(args []string) (string, ui.Config, error) {
+// configuration. configPath is the preference file, or "" to skip it. Its
+// values become the flag defaults, so an explicit flag still wins. The flag
+// package stops at the first non-flag argument, so whatever it leaves over goes
+// to scanDir unchanged and the music directory stays optional. An empty
+// directory means none was given, so the picker chooses one.
+func parseArgs(args []string, configPath string) (string, ui.Config, error) {
+	cfg, err := ui.LoadConfig(configPath)
+	if err != nil {
+		return "", ui.Config{}, err
+	}
+
 	flags := flag.NewFlagSet("termelody", flag.ContinueOnError)
-	seek := flags.Duration("seek", ui.DefaultSeekStep, "how far the arrow keys jump, e.g. 10s")
-	hidden := flags.Bool("hidden", false, "start the folder picker with dot-directories shown")
-	icons := flags.String("icons", string(ui.IconsUnicode), "row icons: unicode, nerd (needs a patched font), or none")
+	seek := flags.Duration("seek", cfg.SeekStep, "how far the arrow keys jump, e.g. 10s")
+	hidden := flags.Bool("hidden", cfg.ShowHidden, "start the folder picker with dot-directories shown")
+	icons := flags.String("icons", string(cfg.Icons), "row icons: unicode, nerd (needs a patched font), or none")
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "usage: termelody [-seek duration] [-hidden] [-icons set] [music directory]\n")
+		if configPath != "" {
+			fmt.Fprintf(flags.Output(), "Settings are read from %s (if present).\n", configPath)
+		}
 		fmt.Fprintln(flags.Output(), "With no music directory, a folder picker opens at $HOME.")
 		flags.PrintDefaults()
 	}
@@ -166,9 +193,9 @@ func parseArgs(args []string) (string, ui.Config, error) {
 	}
 
 	// Only an explicit -seek can be non-positive, because the flag default is
-	// the positive DefaultSeekStep. ui.Config.withDefaults would quietly swap
-	// such a value back to the default, which hides the user's mistake;
-	// refusing it here reports it instead.
+	// the positive DefaultSeekStep or a validated config value. ui.Config's
+	// defaults would quietly swap such a value back, which hides the user's
+	// mistake; refusing it here reports it instead.
 	if *seek <= 0 {
 		return "", ui.Config{}, fmt.Errorf("-seek must be positive, got %s", *seek)
 	}
@@ -183,7 +210,12 @@ func parseArgs(args []string) (string, ui.Config, error) {
 		return "", ui.Config{}, err
 	}
 
-	return dir, ui.Config{SeekStep: *seek, ShowHidden: *hidden, Icons: iconSet}, nil
+	return dir, ui.Config{
+		SeekStep:   *seek,
+		ShowHidden: *hidden,
+		Icons:      iconSet,
+		VolumeStep: cfg.VolumeStep,
+	}, nil
 }
 
 // scanDir resolves a directory named on the command line. An empty result

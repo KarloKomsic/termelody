@@ -12,8 +12,10 @@ Current packages:
 - **loader** — orchestrates scan + metadata enrichment
 - **ipc** — low-level mpv IPC client (Unix socket, JSON protocol)
 - **player** — wraps ipc, tracks playback state, exposes Play/Pause/Stop
-- **ui** — Bubble Tea TUI for interactive browsing and control
-- **cmd/termelody** — entry point, CLI flags, and configuration
+- **ui** — Bubble Tea TUI for browsing and control, the preference schema, and
+  the config file reader
+- **cmd/termelody** — entry point, CLI flags, config path resolution, and
+  precedence
 
 ## Dependency graph
 

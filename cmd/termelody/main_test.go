@@ -3,12 +3,26 @@ package main
 import (
 	"errors"
 	"flag"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"codeberg.org/karlokomsic/termelody/ui"
 )
+
+// writeConfig puts a config file in a temporary directory and returns its path,
+// so parseArgs tests never read the real user config.
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	return path
+}
 
 // mustAbs resolves p or fails the test, so table cases can compare against
 // the same absolute paths scanDir produces.
@@ -81,7 +95,7 @@ func TestParseArgs(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		gotDir, gotCfg, err := parseArgs(c.args)
+		gotDir, gotCfg, err := parseArgs(c.args, "")
 
 		if c.wantErr {
 			if err == nil {
@@ -110,5 +124,74 @@ func TestParseArgs(t *testing.T) {
 		if gotCfg.Icons != c.wantIcons {
 			t.Errorf("%s: Icons = %q, want %q", c.name, gotCfg.Icons, c.wantIcons)
 		}
+		if gotCfg.VolumeStep != ui.DefaultVolumeStep {
+			t.Errorf("%s: VolumeStep = %d, want %d", c.name, gotCfg.VolumeStep, ui.DefaultVolumeStep)
+		}
+	}
+}
+
+func TestParseArgsReadsConfig(t *testing.T) {
+	path := writeConfig(t, `seek = 10s
+icons = nerd
+show_hidden = true
+volume_step = 4
+`)
+
+	dir, cfg, err := parseArgs(nil, path)
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if dir != "" {
+		t.Errorf("dir = %q, want empty so the picker chooses", dir)
+	}
+
+	want := ui.Config{
+		SeekStep:   10 * time.Second,
+		ShowHidden: true,
+		Icons:      ui.IconsNerd,
+		VolumeStep: 4,
+	}
+	if cfg != want {
+		t.Errorf("Config = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestParseArgsFlagsOverrideConfig(t *testing.T) {
+	path := writeConfig(t, `seek = 10s
+icons = nerd
+show_hidden = true
+volume_step = 4
+`)
+
+	_, cfg, err := parseArgs(
+		[]string{"-seek", "20s", "-icons", "none", "-hidden=false"},
+		path,
+	)
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+
+	// volume_step has no flag, so the config value must survive; the three
+	// flags must beat the file values.
+	want := ui.Config{
+		SeekStep:   20 * time.Second,
+		ShowHidden: false,
+		Icons:      ui.IconsNone,
+		VolumeStep: 4,
+	}
+	if cfg != want {
+		t.Errorf("Config = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestParseArgsReportsConfigError(t *testing.T) {
+	path := writeConfig(t, "seek = soon\n")
+
+	_, _, err := parseArgs(nil, path)
+	if err == nil {
+		t.Fatal("parseArgs accepted a malformed config")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error %q does not name the config file %s", err, path)
 	}
 }

@@ -66,6 +66,10 @@ var (
 // advertised and the applied step are the same number by construction.
 const DefaultSeekStep = 5 * time.Second
 
+// DefaultVolumeStep is how much one +/- press changes the volume when no config
+// overrides it. The unit is percent, matching mpv and the readout.
+const DefaultVolumeStep = 1
+
 // Config holds tunables for the TUI. The zero value is valid and yields
 // defaults, so callers can start from an empty Config and fill in only what
 // they care about. Every new preference belongs here rather than in main.
@@ -82,6 +86,11 @@ type Config struct {
 	// value yields IconsUnicode, so a Config that does not mention icons
 	// still renders a set that needs no extra font installed.
 	Icons IconSet
+
+	// VolumeStep is how many percent one +/- press moves the volume. The
+	// zero value yields DefaultVolumeStep, so a Config that does not mention
+	// it keeps the original single-percent steps.
+	VolumeStep int
 }
 
 // withDefaults fills in any options left at their zero value.
@@ -91,6 +100,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.Icons == "" {
 		c.Icons = IconsUnicode
+	}
+	if c.VolumeStep <= 0 {
+		c.VolumeStep = DefaultVolumeStep
 	}
 	return c
 }
@@ -532,17 +544,12 @@ func (m *Model) seek(delta time.Duration) {
 	m.player.Seek(delta)
 }
 
-// volumeStep is how far one keypress moves the volume. A terminal repeats a
-// held key at the operating system's repeat rate, which is around thirty a
-// second here, so the step stays small enough that holding one down sweeps
-// rather than jumps, and every press moves by the same amount.
-const volumeStep = 1
-
-// changeVolume moves the volume by one step in the given direction, surfacing
-// a failure the way advance does rather than letting the key quietly do
-// nothing.
+// changeVolume moves the volume by the configured step, surfacing a failure the
+// way advance does rather than letting the key quietly do nothing. The default
+// step is small because a terminal repeats a held key at around thirty a second;
+// a larger configured step trades fine control for fewer presses.
 func (m *Model) changeVolume(direction int) {
-	if err := m.player.AdjustVolume(direction * volumeStep); err != nil {
+	if err := m.player.AdjustVolume(direction * m.cfg.VolumeStep); err != nil {
 		m.mpvErr = err
 	}
 }

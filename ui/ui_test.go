@@ -75,6 +75,13 @@ func TestConfigDefaults(t *testing.T) {
 	if got := (Config{Icons: IconsNerd}).withDefaults().Icons; got != IconsNerd {
 		t.Errorf("explicit Icons = %q, want %q", got, IconsNerd)
 	}
+
+	if got := (Config{}).withDefaults().VolumeStep; got != DefaultVolumeStep {
+		t.Errorf("zero Config VolumeStep = %d, want %d", got, DefaultVolumeStep)
+	}
+	if got := (Config{VolumeStep: 3}).withDefaults().VolumeStep; got != 3 {
+		t.Errorf("explicit VolumeStep = %d, want 3", got)
+	}
 }
 
 func TestArrowsSeekWithoutMovingSelection(t *testing.T) {
@@ -797,6 +804,20 @@ func TestVolumeKeysAdjustTheLevel(t *testing.T) {
 		m = m.apply(runeMsg(s.key))
 		wantVolume(t, m, s.want)
 	}
+}
+
+func TestVolumeStepComesFromConfig(t *testing.T) {
+	m := newTestModel(t, Config{VolumeStep: 5})
+
+	start := m.player.Volume()
+	if err := m.player.AdjustVolume(-50); err != nil {
+		t.Fatalf("prime volume: %v", err)
+	}
+	low := max(start-50, 0)
+	wantVolume(t, m, low)
+
+	m = m.apply(runeMsg('+'))
+	wantVolume(t, m, low+5)
 }
 
 // lipgloss.Place pads only while it still has room, so a single line wider
