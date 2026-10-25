@@ -98,7 +98,7 @@ func main() {
 
 	p.SetPlaylist(tracks)
 
-	m := ui.New(p, tracks, cfg)
+	m := ui.New(p, tracks, cfg).WithConfigPath(configPath)
 	pgm := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := pgm.Run(); err != nil {

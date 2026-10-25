@@ -150,3 +150,159 @@ func TestLoadConfigReportsReadError(t *testing.T) {
 		t.Error("LoadConfig on a directory succeeded, want an error")
 	}
 }
+
+func TestSaveConfigCreatesFileAndDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "termelody", "config")
+	want := Config{
+		SeekStep:   10 * time.Second,
+		ShowHidden: true,
+		Icons:      IconsNerd,
+		VolumeStep: 4,
+	}
+
+	if err := SaveConfig(path, want); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig after save: %v", err)
+	}
+	if got != want {
+		t.Errorf("round trip = %+v, want %+v", got, want)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("config mode = %o, want 600", mode)
+	}
+
+	dir := filepath.Dir(path)
+	info, err = os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat config directory: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o700 {
+		t.Errorf("config directory mode = %o, want 700", mode)
+	}
+
+	// The temporary file used for the atomic rename must not survive.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read config directory: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "config" {
+		t.Errorf("config directory holds %v, want only config", entries)
+	}
+}
+
+func TestSaveConfigPreservesCommentsOrderAndUnknownLines(t *testing.T) {
+	path := writeConfig(t, `# top comment
+volume_step = 2  # press size
+
+# icons below
+icons = none
+future_setting = keep me
+seek = 1s
+`)
+
+	cfg := Config{
+		SeekStep:   15 * time.Second,
+		ShowHidden: true,
+		Icons:      IconsNerd,
+		VolumeStep: 6,
+	}
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	want := `# top comment
+volume_step = 6 # press size
+
+# icons below
+icons = nerd
+future_setting = keep me
+seek = 15s
+show_hidden = true
+`
+	if string(data) != want {
+		t.Errorf("config =\n%s\nwant\n%s", data, want)
+	}
+}
+
+func TestSaveConfigAppendsMissingKeys(t *testing.T) {
+	path := writeConfig(t, "# keep\nseek = 2s\n")
+
+	cfg := Config{SeekStep: 2 * time.Second, ShowHidden: false, Icons: IconsUnicode, VolumeStep: 1}
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	want := "# keep\nseek = 2s\nicons = unicode\nshow_hidden = false\nvolume_step = 1\n"
+	if string(data) != want {
+		t.Errorf("config =\n%s\nwant\n%s", data, want)
+	}
+}
+
+func TestSaveConfigFillsDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+
+	if err := SaveConfig(path, Config{}); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if want := defaultConfig(); got != want {
+		t.Errorf("LoadConfig after saving zero Config = %+v, want %+v", got, want)
+	}
+}
+
+func TestSaveConfigRequiresAPath(t *testing.T) {
+	if err := SaveConfig("", Config{}); err == nil {
+		t.Error("SaveConfig with an empty path succeeded, want an error")
+	}
+}
+
+func TestSaveConfigReportsReadFailure(t *testing.T) {
+	// A directory cannot be read as a config file, so the save must refuse
+	// rather than replace whatever it does not understand.
+	dir := t.TempDir()
+	if err := SaveConfig(dir, Config{}); err == nil {
+		t.Error("SaveConfig over a directory succeeded, want an error")
+	}
+}
+
+func TestSaveConfigReportsWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+
+	// The parent of the config path is a regular file, so creating the
+	// directory has to fail.
+	path := filepath.Join(blocker, "config")
+	err := SaveConfig(path, Config{})
+	if err == nil {
+		t.Fatal("SaveConfig under a regular file succeeded, want an error")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error %q does not name the config file %s", err, path)
+	}
+}

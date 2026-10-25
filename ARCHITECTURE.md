@@ -13,7 +13,7 @@ Current packages:
 - **ipc** — low-level mpv IPC client (Unix socket, JSON protocol)
 - **player** — wraps ipc, tracks playback state, exposes Play/Pause/Stop
 - **ui** — Bubble Tea TUI for browsing and control, the preference schema, and
-  the config file reader
+  the config file reader and writer
 - **cmd/termelody** — entry point, CLI flags, config path resolution, and
   precedence
 

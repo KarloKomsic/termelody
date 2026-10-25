@@ -111,10 +111,10 @@ func (c Config) withDefaults() Config {
 // terminals lose detail instead of silently losing the end of each line.
 const (
 	helpFull = "  j/k or ↑/↓ move · g/G top/bottom · enter play · space pause · +/- volume\n" +
-		"  ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit"
-	helpCompact = "  j/k move · enter play · space pause · +/- vol\n" +
+		"  ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit · o options"
+	helpCompact = "  j/k move · enter play · space pause · +/- vol · o options\n" +
 		"  ←/→ seek %ds · n/p track · s stop · q quit"
-	helpNarrow = "  enter play · space pause\n" +
+	helpNarrow = "  enter play · space pause · o options\n" +
 		"  ←/→ seek %ds · n/p track\n" +
 		"  +/- vol · s stop · q quit"
 )
@@ -144,6 +144,19 @@ type Model struct {
 	dur      time.Duration
 	mpvErr   error
 	quitting bool
+
+	// configPath is where the options screen writes preferences. It is empty
+	// when no config directory could be resolved; the screen still opens, but
+	// saving reports the problem instead of dropping the changes silently.
+	configPath string
+
+	settingsOpen   bool
+	settingsCursor int
+	// settingsDirty marks changes that have not reached the disk yet. It stays
+	// set after a failed save so closing the screen again retries rather than
+	// treating the preferences as already stored.
+	settingsDirty bool
+	configErr     error
 }
 
 // eventMsg carries a playback event into the Bubble Tea loop. Events have to
@@ -178,6 +191,31 @@ func New(p *player.Player, tracks []playlist.Track, cfg Config) Model {
 		player: p,
 		tracks: tracks,
 		cfg:    cfg.withDefaults(),
+	}
+}
+
+// WithConfigPath tells the model where the options screen saves preferences.
+// The path comes from the CLI layer because only it resolves the OS config
+// directory; ui stays independent of that policy.
+func (m Model) WithConfigPath(path string) Model {
+	m.configPath = path
+	return m
+}
+
+// configSavedMsg reports the outcome of the options screen's save. Writing is a
+// command so a slow or failing disk never blocks Update.
+type configSavedMsg struct {
+	cfg Config
+	err error
+}
+
+// saveConfigCmd writes the edited preferences off Bubble Tea's goroutine. The
+// config is snapshotted here so a later edit made while the write is in flight
+// stays dirty instead of being mistaken for saved.
+func (m Model) saveConfigCmd() tea.Cmd {
+	path, cfg := m.configPath, m.cfg
+	return func() tea.Msg {
+		return configSavedMsg{cfg: cfg, err: SaveConfig(path, cfg)}
 	}
 }
 
@@ -216,11 +254,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mpvErr = errors.New("mpv exited unexpectedly")
 		return m, nil
 
+	case configSavedMsg:
+		if msg.err != nil {
+			// The in-memory values stay applied and settingsDirty stays set,
+			// so the error is visible and the next close retries the write.
+			m.configErr = msg.err
+			return m, nil
+		}
+		m.configErr = nil
+		// A value edited while the write was in flight is newer than the
+		// snapshot that reached the disk, so it has to stay dirty.
+		if m.cfg == msg.cfg {
+			m.settingsDirty = false
+		}
+		return m, nil
+
 	case tea.KeyMsg:
+		// The options screen is modal: none of its keys may fall through to
+		// playback, and none of the playback keys may edit settings.
+		if m.settingsOpen {
+			return m.updateSettings(msg)
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+
+		case "o":
+			m.openSettings()
 
 		case "j", "down":
 			if m.cursor < len(m.tracks)-1 {
@@ -402,6 +464,9 @@ func (m Model) View() string {
 	if m.quitting {
 		return ""
 	}
+	if m.settingsOpen {
+		return m.settingsView()
+	}
 
 	title := "Termelody - " + trackCount(len(m.tracks))
 	if m.width > 0 {
@@ -425,6 +490,17 @@ func (m Model) View() string {
 
 	if m.mpvErr != nil {
 		text := fmt.Sprintf("  %v", m.mpvErr)
+		if m.width > 0 {
+			text = fitRight(text, m.width)
+		}
+		below += errorStyle.Render(text) + "\n"
+	}
+
+	if m.configErr != nil {
+		// Say what failed to save, not just that something did: the usual
+		// causes are an unwritable directory or a full disk, and the edited
+		// values are still live in memory, so the listener can retry.
+		text := fmt.Sprintf("  could not save settings: %v", m.configErr)
 		if m.width > 0 {
 			text = fitRight(text, m.width)
 		}

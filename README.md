@@ -23,6 +23,8 @@ than assumed from the commands that were sent.
 | `enter` | play selected track |
 | `space` | play / pause |
 | `n` / `p`, `>` / `<` | next / previous track |
+| `+` / `-` | volume up / down |
+| `o` | open options |
 | `s` | stop |
 | `q` | quit |
 
@@ -50,7 +52,8 @@ termelody [-seek duration] [-hidden] [-icons set] [music directory]
 Termelody reads `termelody/config` from the OS config directory
 (`os.UserConfigDir`); on Linux that is `$XDG_CONFIG_HOME/termelody/config`,
 usually `~/.config/termelody/config`. The file is optional: without it the
-defaults below apply. Command-line flags override values from the file.
+defaults below apply. Command-line flags override values from the file, and the
+options screen edits the same file.
 
 The format is one `key = value` per line. `#` starts a comment, either on its
 own line or after a value.
@@ -71,8 +74,26 @@ volume_step = 1
 | `volume_step` | `1` | percent added or removed by one `+` / `-` press |
 
 Unknown or duplicate keys, and invalid values, are reported with the file and
-line at startup rather than silently ignored. `volume_step` is currently
-config-file only.
+line at startup rather than silently ignored.
+
+### Options screen
+
+Press `o` while the player is running to edit the preferences without leaving
+the terminal:
+
+| Key | Action |
+|---|---|
+| `j` / `k`, `↓` / `↑` | move between rows |
+| `←` / `→`, `enter` | change the selected value |
+| `esc`, `q` | save and close |
+| `ctrl+c` | quit without saving |
+
+Changes to `seek`, `icons`, and `volume_step` apply immediately. `show_hidden`
+is saved for the next folder picker, because the picker runs as a separate
+program before playback starts. Saving updates only the four known keys, so
+comments, ordering, and other lines in the file survive; a missing file is
+created with the current values. Opening and closing the screen without
+changing anything leaves the file untouched.
 
 ### Picker controls
 

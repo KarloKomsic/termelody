@@ -25,6 +25,31 @@ func TestParseIconSet(t *testing.T) {
 	}
 }
 
+func TestIconSetNextCycles(t *testing.T) {
+	cases := []struct {
+		from  IconSet
+		delta int
+		want  IconSet
+	}{
+		{IconsUnicode, 1, IconsNerd},
+		{IconsNerd, 1, IconsNone},
+		{IconsNone, 1, IconsUnicode},
+		{IconsUnicode, -1, IconsNone},
+		{IconsNone, -1, IconsNerd},
+		{IconsNerd, 2, IconsUnicode},
+		{IconsNerd, 0, IconsNerd},
+		// A value the loader would reject still has somewhere to move from.
+		{IconSet("bogus"), 1, IconsNerd},
+		{IconSet("bogus"), 0, IconsUnicode},
+	}
+
+	for _, c := range cases {
+		if got := c.from.next(c.delta); got != c.want {
+			t.Errorf("%q.next(%d) = %q, want %q", c.from, c.delta, got, c.want)
+		}
+	}
+}
+
 func TestIconPrefixes(t *testing.T) {
 	cases := []struct {
 		set           IconSet

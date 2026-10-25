@@ -39,5 +39,5 @@
 - [x] Show how many tracks were loaded, in the TUI title
 - [ ] Shuffle and repeat
 - [x] Load preferences from a config file
-- [ ] Edit preferences from the TUI
+- [x] Edit preferences from the TUI
 - [ ] Error recovery and reconnection

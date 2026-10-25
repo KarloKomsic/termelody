@@ -17,7 +17,8 @@ const (
 	IconsNone IconSet = "none"
 )
 
-// ParseIconSet validates a value from a flag or, later, a config file.
+// ParseIconSet validates a value from a flag, the config file, or the options
+// screen.
 func ParseIconSet(value string) (IconSet, error) {
 	switch set := IconSet(value); set {
 	case IconsUnicode, IconsNerd, IconsNone:
@@ -25,6 +26,27 @@ func ParseIconSet(value string) (IconSet, error) {
 	default:
 		return "", fmt.Errorf("unknown icon set %q, want unicode, nerd, or none", value)
 	}
+}
+
+// iconSetOrder is the cycle the options screen walks, from the portable set to
+// the one that needs a patched font and finally back to no icons.
+var iconSetOrder = []IconSet{IconsUnicode, IconsNerd, IconsNone}
+
+// next returns the icon set delta steps around iconSetOrder. Unknown values
+// start from the unicode set instead of failing, so a hand-edited config cannot
+// leave the options screen with no value to move from.
+func (s IconSet) next(delta int) IconSet {
+	index := 0
+	for i, set := range iconSetOrder {
+		if set == s {
+			index = i
+			break
+		}
+	}
+
+	n := len(iconSetOrder)
+	index = (index + delta%n + n) % n
+	return iconSetOrder[index]
 }
 
 // folderPrefix is the column prefix for a directory row. It includes the
