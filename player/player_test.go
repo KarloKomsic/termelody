@@ -229,6 +229,219 @@ func TestPlayIndexRejectsOutOfRange(t *testing.T) {
 	}
 }
 
+// repeatOne is two presses away because the cycle is off -> all -> one, which
+// is the order the keybinding walks.
+func TestRepeatOneReplaysTheTrackThatEnded(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	p := newTestPlayer(t)
+	p.SetPlaylist(tracks(file, file))
+	if err := p.PlayIndex(0); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	wantState(t, p, StatePlaying)
+
+	p.CycleRepeat()
+	p.CycleRepeat()
+	if got := p.Repeat(); got != RepeatOne {
+		t.Fatalf("repeat = %s, want one", got)
+	}
+
+	played, err := p.Advance()
+	if err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	if !played {
+		t.Fatal("repeat-one did not replay anything")
+	}
+	if got := p.Index(); got != 0 {
+		t.Errorf("index = %d, want 0: repeat-one moved tracks", got)
+	}
+	wantState(t, p, StatePlaying)
+}
+
+func TestRepeatOffStopsAtTheEndOfThePlaylist(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	p := newTestPlayer(t)
+	p.SetPlaylist(tracks(file, file))
+	if err := p.PlayIndex(1); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+
+	played, err := p.Advance()
+	if err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	if played {
+		t.Error("repeat-off started another track after the last one")
+	}
+	if got := p.Index(); got != 1 {
+		t.Errorf("index = %d, want 1", got)
+	}
+}
+
+func TestRepeatAllWrapsToTheStart(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	p := newTestPlayer(t)
+	p.SetPlaylist(tracks(file, file))
+	if err := p.PlayIndex(1); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	p.CycleRepeat()
+	if got := p.Repeat(); got != RepeatAll {
+		t.Fatalf("repeat = %s, want all", got)
+	}
+
+	played, err := p.Advance()
+	if err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	if !played {
+		t.Fatal("repeat-all did not start the first track")
+	}
+	if got := p.Index(); got != 0 {
+		t.Errorf("index = %d, want 0: repeat-all did not wrap", got)
+	}
+	wantState(t, p, StatePlaying)
+}
+
+// A shuffle cycle is a permutation, not an endless random draw: every track
+// gets one turn before any of them repeats. Without that, a small playlist can
+// keep landing on the same two tracks and never reach the rest.
+func TestShuffleVisitsEachTrackOncePerCycle(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	paths := make([]string, 5)
+	for i := range paths {
+		paths[i] = file
+	}
+
+	p := newTestPlayer(t)
+	p.SetPlaylist(tracks(paths...))
+	if err := p.PlayIndex(0); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	p.SetShuffle(true)
+
+	seen := map[int]bool{0: true}
+	for range len(paths) - 1 {
+		if err := p.Next(); err != nil {
+			t.Fatalf("next: %v", err)
+		}
+		index := p.Index()
+		if seen[index] {
+			t.Fatalf("track %d repeated before the cycle finished: seen %v", index, seen)
+		}
+		seen[index] = true
+	}
+
+	if len(seen) != len(paths) {
+		t.Errorf("visited %d tracks in one cycle, want %d", len(seen), len(paths))
+	}
+
+	// The cycle is spent, so repeat-off has nothing left to play.
+	played, err := p.Advance()
+	if err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	if played {
+		t.Error("shuffle replayed a track after the cycle ended with repeat off")
+	}
+
+	// repeat-all starts a new permutation, and it must not begin with the
+	// track that just ended or the wrap would look like repeat-one.
+	last := p.Index()
+	p.CycleRepeat()
+	played, err = p.Advance()
+	if err != nil {
+		t.Fatalf("advance after repeat-all: %v", err)
+	}
+	if !played {
+		t.Fatal("repeat-all did not start a new shuffle cycle")
+	}
+	if got := p.Index(); got == last {
+		t.Errorf("new cycle began by replaying track %d", got)
+	}
+}
+
+func TestShufflePrevRetracesTheCycle(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	paths := make([]string, 4)
+	for i := range paths {
+		paths[i] = file
+	}
+
+	p := newTestPlayer(t)
+	p.SetPlaylist(tracks(paths...))
+	if err := p.PlayIndex(0); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	p.SetShuffle(true)
+
+	if err := p.Next(); err != nil {
+		t.Fatalf("next: %v", err)
+	}
+	first := p.Index()
+	if err := p.Next(); err != nil {
+		t.Fatalf("next: %v", err)
+	}
+
+	if err := p.Prev(); err != nil {
+		t.Fatalf("prev: %v", err)
+	}
+	if got := p.Index(); got != first {
+		t.Errorf("prev landed on %d, want %d from the shuffled history", got, first)
+	}
+
+	if err := p.Prev(); err != nil {
+		t.Fatalf("prev: %v", err)
+	}
+	if got := p.Index(); got != 0 {
+		t.Errorf("second prev = %d, want the starting track 0", got)
+	}
+}
+
+func TestSetShuffleKeepsTheCurrentTrack(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	p := newTestPlayer(t)
+	p.SetPlaylist(tracks(file, file, file))
+	if err := p.PlayIndex(2); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+
+	p.SetShuffle(true)
+	if got := p.Index(); got != 2 {
+		t.Errorf("index = %d after enabling shuffle, want 2", got)
+	}
+
+	p.SetShuffle(false)
+	if got := p.Index(); got != 2 {
+		t.Errorf("index = %d after disabling shuffle, want 2", got)
+	}
+}
+
 // TestTwoDefaultPlayersCoexist is the regression test for the shared socket
 // path. With a fixed path, the second New unlinked the first's live socket, so
 // the first could no longer be reached at all.

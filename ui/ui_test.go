@@ -426,6 +426,77 @@ func TestAutoAdvanceStopsAfterTheLastTrack(t *testing.T) {
 	}
 }
 
+func TestShuffleAndRepeatKeys(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	m = m.apply(runeMsg('z'))
+	if !m.player.Shuffle() {
+		t.Error("z did not enable shuffle")
+	}
+	m = m.apply(runeMsg('z'))
+	if m.player.Shuffle() {
+		t.Error("a second z did not disable shuffle")
+	}
+
+	steps := []player.Repeat{player.RepeatAll, player.RepeatOne, player.RepeatOff}
+	for _, want := range steps {
+		m = m.apply(runeMsg('r'))
+		if got := m.player.Repeat(); got != want {
+			t.Fatalf("repeat after r = %s, want %s", got, want)
+		}
+	}
+}
+
+func TestViewShowsShuffleAndRepeatStatus(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 100, 24
+
+	m.player.SetShuffle(true)
+	m.player.CycleRepeat() // all
+
+	out := m.View()
+	if !strings.Contains(out, "shuffle") {
+		t.Errorf("view does not report shuffle:\n%s", out)
+	}
+	if !strings.Contains(out, "repeat all") {
+		t.Errorf("view does not report the repeat mode:\n%s", out)
+	}
+	if got := lipgloss.Height(out); got != m.height {
+		t.Errorf("rendered %d lines, want exactly %d", got, m.height)
+	}
+}
+
+func TestHelpAdvertisesShuffleAndRepeat(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 100, 24
+
+	out := m.View()
+	for _, want := range []string{"z shuffle", "r repeat"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help bar does not advertise %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestAutoAdvanceWithRepeatAllWraps(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.step(1) // park on the last track
+
+	m.player.CycleRepeat()
+	if got := m.player.Repeat(); got != player.RepeatAll {
+		t.Fatalf("repeat = %s, want all", got)
+	}
+
+	m = m.apply(endFile("eof"))
+
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0: repeat-all did not wrap", m.cursor)
+	}
+	if m.player.Index() != 0 {
+		t.Errorf("player index = %d, want 0: repeat-all did not wrap", m.player.Index())
+	}
+}
+
 // manyTracks builds a playlist whose labels can be told apart in the render.
 func manyTracks(n int) []playlist.Track {
 	tracks := make([]playlist.Track, n)

@@ -11,7 +11,8 @@ Current packages:
 - **metadata** — reads audio tags (ID3, Vorbis, etc.) from files
 - **loader** — orchestrates scan + metadata enrichment
 - **ipc** — low-level mpv IPC client (Unix socket, JSON protocol)
-- **player** — wraps ipc, tracks playback state, exposes Play/Pause/Stop
+- **player** — wraps ipc, tracks playback state, exposes Play/Pause/Stop, owns
+  the mpv process, and decides shuffle and repeat order
 - **ui** — Bubble Tea TUI for browsing and control, the preference schema, and
   the config file reader and writer
 - **cmd/termelody** — entry point, CLI flags, config path resolution, and

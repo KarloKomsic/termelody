@@ -24,9 +24,17 @@ than assumed from the commands that were sent.
 | `space` | play / pause |
 | `n` / `p`, `>` / `<` | next / previous track |
 | `+` / `-` | volume up / down |
+| `z` | toggle shuffle |
+| `r` | cycle repeat: off → all → one |
 | `o` | open options |
 | `s` | stop |
 | `q` | quit |
+
+Shuffle plays every track once per cycle before any repeats; `n` and `p` walk
+that order too. Repeat `all` wraps at the end of the playlist and repeat `one`
+replays the current track. With repeat off, a track that ends on its own stops
+at the last track, while pressing `n` still wraps because that is an explicit
+choice.
 
 ## Usage
 

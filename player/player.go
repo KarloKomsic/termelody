@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -45,6 +46,44 @@ func (s State) String() string {
 	}
 }
 
+// Repeat controls what happens when the current track ends on its own.
+type Repeat int
+
+const (
+	// RepeatOff stops at the end of the playlist. Pressing next still wraps,
+	// because that is an explicit choice the listener made.
+	RepeatOff Repeat = iota
+
+	// RepeatAll continues at the other end of the playlist.
+	RepeatAll
+
+	// RepeatOne replays the track that just ended.
+	RepeatOne
+)
+
+func (r Repeat) String() string {
+	switch r {
+	case RepeatAll:
+		return "all"
+	case RepeatOne:
+		return "one"
+	default:
+		return "off"
+	}
+}
+
+// next cycles off -> all -> one -> off, the order the keybinding walks.
+func (r Repeat) next() Repeat {
+	switch r {
+	case RepeatOff:
+		return RepeatAll
+	case RepeatAll:
+		return RepeatOne
+	default:
+		return RepeatOff
+	}
+}
+
 // Player manages mpv playback.
 //
 // Playback state is not tracked by assuming commands succeeded. A single
@@ -67,6 +106,16 @@ type Player struct {
 
 	tracks []playlist.Track
 	index  int
+
+	// shuffle and repeat decide what Next and Advance choose. When shuffle
+	// is on, order is a permutation of the tracks and orderPos points at the
+	// current one, so a cycle visits everything once before repeating.
+	// Locking them with mu keeps a keypress and an event-driven advance from
+	// disagreeing about where the cycle is.
+	shuffle  bool
+	repeat   Repeat
+	order    []int
+	orderPos int
 }
 
 // Config holds the optional settings of a Player.
@@ -304,41 +353,247 @@ func (p *Player) Play(track playlist.Track) error {
 
 // PlayIndex plays the track at the given position in the playlist.
 func (p *Player) PlayIndex(i int) error {
+	p.mu.Lock()
 	if i < 0 || i >= len(p.tracks) {
+		p.mu.Unlock()
 		return fmt.Errorf("index %d out of range", i)
 	}
 	p.index = i
-	return p.Play(p.tracks[i])
+	// An explicit choice is a jump within the current shuffle cycle, not a
+	// reason to throw the remaining order away.
+	p.syncShufflePosLocked()
+	track := p.tracks[i]
+	p.mu.Unlock()
+
+	return p.Play(track)
 }
 
 // SetPlaylist sets the track list and resets the index to 0.
 func (p *Player) SetPlaylist(tracks []playlist.Track) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	p.tracks = tracks
 	p.index = 0
+	p.order = nil
+	p.orderPos = 0
+	if p.shuffle {
+		p.rebuildShuffleLocked()
+	}
 }
 
 // Next advances to the next track and plays it.
 func (p *Player) Next() error {
-	if len(p.tracks) == 0 {
+	p.mu.Lock()
+	i, ok := p.nextIndexLocked(true)
+	if !ok {
+		p.mu.Unlock()
 		return nil
 	}
-	next := p.index + 1
-	if next >= len(p.tracks) {
-		next = 0
-	}
-	return p.PlayIndex(next)
+	p.index = i
+	track := p.tracks[i]
+	p.mu.Unlock()
+
+	return p.Play(track)
 }
 
 // Prev goes back to the previous track and plays it.
 func (p *Player) Prev() error {
-	if len(p.tracks) == 0 {
+	p.mu.Lock()
+	i, ok := p.prevIndexLocked(true)
+	if !ok {
+		p.mu.Unlock()
 		return nil
 	}
-	prev := p.index - 1
-	if prev < 0 {
-		prev = len(p.tracks) - 1
+	p.index = i
+	track := p.tracks[i]
+	p.mu.Unlock()
+
+	return p.Play(track)
+}
+
+// Advance plays whatever should follow a track that ended on its own and
+// reports whether anything was started. Repeat one replays the same track,
+// repeat all wraps around, and repeat off stops at the end of the playlist.
+// Shuffle is honoured throughout, so a natural end walks the shuffled cycle
+// instead of undoing the listener's choice.
+func (p *Player) Advance() (bool, error) {
+	p.mu.Lock()
+	if len(p.tracks) == 0 {
+		p.mu.Unlock()
+		return false, nil
 	}
-	return p.PlayIndex(prev)
+
+	if p.repeat == RepeatOne {
+		track := p.tracks[p.index]
+		p.mu.Unlock()
+		return true, p.Play(track)
+	}
+
+	i, ok := p.nextIndexLocked(p.repeat == RepeatAll)
+	if !ok {
+		p.mu.Unlock()
+		return false, nil
+	}
+	p.index = i
+	track := p.tracks[i]
+	p.mu.Unlock()
+
+	return true, p.Play(track)
+}
+
+// SetShuffle turns shuffled order on or off. Enabling it keeps the current
+// track in place and builds a fresh cycle around it, so the next track is a
+// new choice rather than a jump.
+func (p *Player) SetShuffle(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.shuffle == on {
+		return
+	}
+	p.shuffle = on
+	if on {
+		p.rebuildShuffleLocked()
+	} else {
+		p.order = nil
+		p.orderPos = 0
+	}
+}
+
+// Shuffle reports whether tracks are chosen in shuffled order.
+func (p *Player) Shuffle() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.shuffle
+}
+
+// CycleRepeat moves to the next repeat mode and returns it, so the UI can
+// report the value the player actually switched to.
+func (p *Player) CycleRepeat() Repeat {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.repeat = p.repeat.next()
+	return p.repeat
+}
+
+// Repeat returns the current repeat mode.
+func (p *Player) Repeat() Repeat {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.repeat
+}
+
+// nextIndexLocked chooses the next track without playing it. wrap says
+// whether the end of the order may start over, which is what makes an
+// explicit "next" wrap while a finished playlist does not unless repeat-all
+// asked for it.
+func (p *Player) nextIndexLocked(wrap bool) (int, bool) {
+	if len(p.tracks) == 0 {
+		return 0, false
+	}
+
+	if !p.shuffle {
+		next := p.index + 1
+		if next < len(p.tracks) {
+			return next, true
+		}
+		if !wrap {
+			return 0, false
+		}
+		return 0, true
+	}
+
+	if len(p.order) != len(p.tracks) {
+		p.rebuildShuffleLocked()
+	}
+	if p.orderPos+1 < len(p.order) {
+		p.orderPos++
+		return p.order[p.orderPos], true
+	}
+	if !wrap {
+		return 0, false
+	}
+
+	p.rebuildShuffleLocked()
+	// A fresh cycle should not start by replaying the track that just ended,
+	// which would look like repeat-one had been turned on by accident.
+	if len(p.order) > 1 && p.order[0] == p.index {
+		last := len(p.order) - 1
+		p.order[0], p.order[last] = p.order[last], p.order[0]
+	}
+	p.orderPos = 0
+	return p.order[0], true
+}
+
+// prevIndexLocked mirrors nextIndexLocked. Going backwards walks the cycle
+// that is already laid out, because that is the history the listener just
+// heard; only a wrapped explicit prev revisits its end.
+func (p *Player) prevIndexLocked(wrap bool) (int, bool) {
+	if len(p.tracks) == 0 {
+		return 0, false
+	}
+
+	if !p.shuffle {
+		prev := p.index - 1
+		if prev >= 0 {
+			return prev, true
+		}
+		if !wrap {
+			return 0, false
+		}
+		return len(p.tracks) - 1, true
+	}
+
+	if len(p.order) != len(p.tracks) {
+		p.rebuildShuffleLocked()
+	}
+	if p.orderPos > 0 {
+		p.orderPos--
+		return p.order[p.orderPos], true
+	}
+	if !wrap {
+		return 0, false
+	}
+	p.orderPos = len(p.order) - 1
+	return p.order[p.orderPos], true
+}
+
+// rebuildShuffleLocked lays out a fresh permutation with the current track at
+// its front. That leaves every other track ahead of the next wrap, so a cycle
+// is guaranteed to reach all of them, and the already-playing track is not
+// picked again immediately.
+func (p *Player) rebuildShuffleLocked() {
+	p.order = rand.Perm(len(p.tracks))
+	p.orderPos = 0
+
+	for i, index := range p.order {
+		if index == p.index {
+			p.order[0], p.order[i] = p.order[i], p.order[0]
+			return
+		}
+	}
+}
+
+// syncShufflePosLocked keeps orderPos on the current track after an explicit
+// jump. The rest of the cycle survives, so jumping to a track early does not
+// make the ones before it play twice.
+func (p *Player) syncShufflePosLocked() {
+	if !p.shuffle {
+		return
+	}
+	if len(p.order) != len(p.tracks) {
+		p.rebuildShuffleLocked()
+		return
+	}
+	for i, index := range p.order {
+		if index == p.index {
+			p.orderPos = i
+			return
+		}
+	}
+	p.rebuildShuffleLocked()
 }
 
 // Pause pauses playback.
@@ -447,11 +702,16 @@ func (p *Player) Progress() float64 {
 
 // Index returns the current track index in the playlist.
 func (p *Player) Index() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.index
 }
 
 // Track returns the currently loaded track.
 func (p *Player) Track() playlist.Track {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if len(p.tracks) == 0 {
 		return playlist.Track{}
 	}

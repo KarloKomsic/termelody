@@ -111,12 +111,15 @@ func (c Config) withDefaults() Config {
 // terminals lose detail instead of silently losing the end of each line.
 const (
 	helpFull = "  j/k or ↑/↓ move · g/G top/bottom · enter play · space pause · +/- volume\n" +
-		"  ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit · o options"
+		"  ←/→ seek %ds · n/p or >/< next/prev · s stop · q quit · o options\n" +
+		"  z shuffle · r repeat"
 	helpCompact = "  j/k move · enter play · space pause · +/- vol · o options\n" +
-		"  ←/→ seek %ds · n/p track · s stop · q quit"
+		"  ←/→ seek %ds · n/p track · z shuffle · r repeat\n" +
+		"  s stop · q quit"
 	helpNarrow = "  enter play · space pause · o options\n" +
 		"  ←/→ seek %ds · n/p track\n" +
-		"  +/- vol · s stop · q quit"
+		"  +/- vol · z shuffle · r repeat\n" +
+		"  s stop · q quit"
 )
 
 // tickInterval is how often the progress readout refreshes. It is far slower
@@ -284,6 +287,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "o":
 			m.openSettings()
 
+		case "z":
+			m.player.SetShuffle(!m.player.Shuffle())
+
+		case "r":
+			m.player.CycleRepeat()
+
 		case "j", "down":
 			if m.cursor < len(m.tracks)-1 {
 				m.cursor++
@@ -391,7 +400,14 @@ func (m Model) progressBar() string {
 // deliberate: the number answers exactly how loud, the bar answers roughly
 // where, and the progress bar above trades precision the same way.
 func (m Model) volumeBar() string {
-	prefix := fmt.Sprintf("  [%s] · volume %d%%  ", m.player.State(), m.player.Volume())
+	status := fmt.Sprintf("  [%s] · volume %d%%", m.player.State(), m.player.Volume())
+	if repeat := m.player.Repeat(); repeat != player.RepeatOff {
+		status += " · repeat " + repeat.String()
+	}
+	if m.player.Shuffle() {
+		status += " · shuffle"
+	}
+	prefix := status + "  "
 
 	// The bar yields to the terminal before the numbers do: the exact level
 	// is the important half, and a bar squeezed next to it says nothing.
@@ -630,41 +646,42 @@ func (m *Model) changeVolume(direction int) {
 	}
 }
 
-// advance plays the track after the one that ended on its own. It stops at
-// the end of the playlist instead of wrapping: pressing n is a choice the
-// listener made, while looping forever with no repeat toggle is not one they
-// can undo.
-//
-// The cursor is moved to follow playback because it may have been parked
-// elsewhere while the track was playing, and a highlight that disagrees with
-// what is playing is worse than no highlight at all.
+// advance plays whatever should follow a track that ended on its own. What
+// that means is the player's decision: repeat-one replays, repeat-all wraps,
+// and repeat-off stops at the end. The cursor follows because it may have been
+// parked elsewhere while the track was playing, and a highlight that disagrees
+// with what is playing is worse than no highlight at all.
 func (m *Model) advance() {
-	if len(m.tracks) == 0 || m.player.Index() >= len(m.tracks)-1 {
-		return
-	}
-
-	if err := m.player.Next(); err != nil {
+	played, err := m.player.Advance()
+	if err != nil {
 		m.mpvErr = err
 		return
 	}
-	m.cursor = m.player.Index()
+	if played {
+		m.cursor = m.player.Index()
+	}
 }
 
-// step moves the cursor by delta tracks, wrapping at both ends, and plays
-// whatever it lands on. The cursor drives navigation so the selection stays
-// in sync with what is playing.
+// step moves by delta tracks and plays whatever it lands on. The player owns
+// the ordering so shuffle applies here too; the cursor follows the finished
+// choice rather than predicting it.
 func (m *Model) step(delta int) {
 	if len(m.tracks) == 0 {
 		return
 	}
 
-	next := (m.cursor + delta) % len(m.tracks)
-	if next < 0 {
-		next += len(m.tracks)
+	var err error
+	if delta > 0 {
+		err = m.player.Next()
+	} else {
+		err = m.player.Prev()
+	}
+	if err != nil {
+		m.mpvErr = err
+		return
 	}
 
-	m.cursor = next
-	m.player.PlayIndex(next)
+	m.cursor = m.player.Index()
 }
 
 // trackCount spells the playlist size out for the title, using the singular
