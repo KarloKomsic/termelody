@@ -195,3 +195,64 @@ func TestParseArgsReportsConfigError(t *testing.T) {
 		t.Errorf("error %q does not name the config file %s", err, path)
 	}
 }
+
+func TestParseArgsReportsVersionRequest(t *testing.T) {
+	for _, args := range [][]string{{"-version"}, {"-v"}} {
+		_, _, err := parseArgs(args, "")
+		if !errors.Is(err, errVersion) {
+			t.Errorf("parseArgs(%q) error = %v, want errVersion", args, err)
+		}
+	}
+}
+
+// The early check has to understand every flag that consumes a value, or a
+// version request after -seek would be missed and the config would be loaded
+// first.
+func TestVersionRequested(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"the version flag alone", []string{"-version"}, true},
+		{"the double-dash form", []string{"--version"}, true},
+		{"the short form", []string{"-v"}, true},
+		{"version after another flag", []string{"-seek", "10s", "-version"}, true},
+		{"the short form after another flag", []string{"-seek", "10s", "-v"}, true},
+		{"version before the directory", []string{"-version", "library"}, true},
+		{"an explicit false is not a request", []string{"-version=false"}, false},
+		{"the short form explicitly false", []string{"-v=false"}, false},
+		{"no flags", nil, false},
+		{"help only", []string{"-h"}, false},
+		{"a positional argument ends flag parsing", []string{"library", "-version"}, false},
+		{"an unknown flag is left to parseArgs", []string{"-version", "-bogus"}, false},
+	}
+
+	for _, c := range cases {
+		if got := versionRequested(c.args); got != c.want {
+			t.Errorf("%s: versionRequested(%q) = %v, want %v", c.name, c.args, got, c.want)
+		}
+	}
+}
+
+func TestCurrentVersionPrefersLinkTimeVersion(t *testing.T) {
+	old := version
+	version = "v9.9.9"
+	t.Cleanup(func() { version = old })
+
+	if got := currentVersion(); got != "v9.9.9" {
+		t.Errorf("currentVersion = %q, want the link-time version", got)
+	}
+}
+
+// A plain build has no release to name, so the fallback must still produce
+// something printable rather than an empty line.
+func TestCurrentVersionHasAFallback(t *testing.T) {
+	old := version
+	version = ""
+	t.Cleanup(func() { version = old })
+
+	if got := currentVersion(); got == "" {
+		t.Error("currentVersion returned an empty version")
+	}
+}

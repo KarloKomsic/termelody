@@ -4,8 +4,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -15,7 +17,27 @@ import (
 	"codeberg.org/karlokomsic/termelody/ui"
 )
 
+// version is replaced at build time:
+//
+//	go build -ldflags "-X main.version=v1.0.0"
+//
+// A plain build leaves it empty, which lets currentVersion fall back to the
+// module version Go records, as it does for go install.
+var version string
+
+// errVersion signals that -version was given; it is not a failure, so main
+// exits cleanly instead of reporting it.
+var errVersion = errors.New("version requested")
+
 func main() {
+	// Answer a version request before the config is read. Bug reports are
+	// exactly when the config file is likely to be the broken part, and the
+	// version must still be available then.
+	if versionRequested(os.Args[1:]) {
+		printVersion()
+		return
+	}
+
 	configPath, err := userConfigPath()
 	if err != nil {
 		// The config file is optional, so an unavailable config directory
@@ -25,6 +47,10 @@ func main() {
 
 	dir, cfg, err := parseArgs(os.Args[1:], configPath)
 	if err != nil {
+		if errors.Is(err, errVersion) {
+			printVersion()
+			return
+		}
 		// flag.ErrHelp means -h already printed the usage, so echoing the
 		// error on top of it would turn a routine request into a failure.
 		if !errors.Is(err, flag.ErrHelp) {
@@ -113,6 +139,50 @@ func main() {
 	}
 }
 
+// printVersion writes the build version as one line, which is the shape scripts
+// and bug reports expect.
+func printVersion() {
+	fmt.Printf("termelody %s\n", currentVersion())
+}
+
+// currentVersion prefers the link-time version and falls back to the module
+// version Go embeds. go install leaves main.version empty but records the
+// resolved module version, so an installed binary can still name its release.
+func currentVersion() string {
+	if version != "" {
+		return version
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		// A plain go build has no release to name, and "(devel)" is Go's
+		// marker rather than a version anyone can act on.
+		return "dev"
+	}
+	return info.Main.Version
+}
+
+// versionRequested reports whether -version was passed without reading the
+// config file. The flag package needs every flag that takes a value to parse
+// the arguments correctly, so this set mirrors parseArgs; a new flag must be
+// added in both places. Parse errors are ignored here because parseArgs
+// reports them with the config-dependent defaults in view.
+func versionRequested(args []string) bool {
+	flags := flag.NewFlagSet("termelody", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	flags.Duration("seek", 0, "")
+	flags.Bool("hidden", false, "")
+	flags.String("icons", "", "")
+	show := flags.Bool("version", false, "")
+	short := flags.Bool("v", false, "")
+
+	if err := flags.Parse(args); err != nil {
+		return false
+	}
+	return *show || *short
+}
+
 // pickDir runs the folder browser and returns the chosen directory, or "" when
 // the listener canceled. An empty start opens at $HOME, with the working
 // directory as a fallback when $HOME is unavailable. notice is shown above the
@@ -179,8 +249,10 @@ func parseArgs(args []string, configPath string) (string, ui.Config, error) {
 	seek := flags.Duration("seek", cfg.SeekStep, "how far the arrow keys jump, e.g. 10s")
 	hidden := flags.Bool("hidden", cfg.ShowHidden, "start the folder picker with dot-directories shown")
 	icons := flags.String("icons", string(cfg.Icons), "row icons: unicode, nerd (needs a patched font), or none")
+	showVersion := flags.Bool("version", false, "print the version and exit")
+	shortVersion := flags.Bool("v", false, "print the version and exit (same as -version)")
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "usage: termelody [-seek duration] [-hidden] [-icons set] [music directory]\n")
+		fmt.Fprintf(flags.Output(), "usage: termelody [-seek duration] [-hidden] [-icons set] [-version] [music directory]\n")
 		if configPath != "" {
 			fmt.Fprintf(flags.Output(), "Settings are read from %s (if present).\n", configPath)
 		}
@@ -190,6 +262,10 @@ func parseArgs(args []string, configPath string) (string, ui.Config, error) {
 
 	if err := flags.Parse(args); err != nil {
 		return "", ui.Config{}, err
+	}
+
+	if *showVersion || *shortVersion {
+		return "", ui.Config{}, errVersion
 	}
 
 	// Only an explicit -seek can be non-positive, because the flag default is
@@ -229,6 +305,6 @@ func scanDir(args []string) (string, error) {
 	case 1:
 		return filepath.Abs(args[0])
 	default:
-		return "", fmt.Errorf("usage: termelody [-seek duration] [-hidden] [-icons set] [music directory]")
+		return "", fmt.Errorf("usage: termelody [-seek duration] [-hidden] [-icons set] [-version] [music directory]")
 	}
 }

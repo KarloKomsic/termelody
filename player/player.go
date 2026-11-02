@@ -2,6 +2,7 @@ package player
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -24,6 +25,11 @@ const stateEventBuffer = 32
 // maxVolume is the ceiling in percent. 100 is no amplification, so the level
 // can be lowered freely but never pushed louder than the source.
 const maxVolume = 100
+
+// errClosed is returned when a restart is attempted after Close. Shutdown
+// owns the mpv process at that point, so a relaunch would leak a child no
+// deferred call would ever reap.
+var errClosed = errors.New("player is closed")
 
 type State int
 
@@ -94,6 +100,17 @@ type Player struct {
 	mpv    *ipc.MPV
 	events chan Event
 
+	// lifecycle serializes Restart and Close. Shutdown must not race a
+	// relaunch, or Close could tear down one mpv while Restart installs
+	// another and leave a child nobody owns.
+	lifecycle sync.Mutex
+	closed    bool
+
+	// socketPath is the path mpv was asked to listen on, empty for a private
+	// one. Restart reuses it so an external client that connected to the
+	// original socket finds the replacement in the same place.
+	socketPath string
+
 	// mu guards the fields the event goroutine writes and other goroutines
 	// read. tracks and index are untouched by that goroutine, so they stay
 	// under the control of whoever drives the player.
@@ -116,6 +133,15 @@ type Player struct {
 	repeat   Repeat
 	order    []int
 	orderPos int
+
+	// wantPlayback, resumePos, and resumePaused describe what to restore if
+	// mpv dies. They are kept apart from state and pos because a dying mpv
+	// emits end-file before it goes, which resets both; without a separate
+	// copy the track that was playing would look like it had finished and
+	// recovery would start an empty player instead of resuming.
+	wantPlayback bool
+	resumePos    time.Duration
+	resumePaused bool
 }
 
 // Config holds the optional settings of a Player.
@@ -135,8 +161,46 @@ func New() (*Player, error) {
 // NewWithConfig creates a Player with the given settings and starts an mpv
 // instance in the background.
 func NewWithConfig(cfg Config) (*Player, error) {
+	mpv, err := startMPV(cfg.SocketPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reading volume rather than starting at mpv's default of 100 keeps the
+	// first report honest. Observing sends the current value too, but only
+	// once the event goroutine below drains it, so a render that beat it
+	// would otherwise claim silence.
+	raw, err := mpv.GetProperty("volume")
+	if err != nil {
+		_ = mpv.Quit()
+		return nil, fmt.Errorf("failed to read volume: %w", err)
+	}
+	volume, ok := raw.(float64)
+	if !ok {
+		_ = mpv.Quit()
+		return nil, fmt.Errorf("volume came back as %T, want a number", raw)
+	}
+
+	p := &Player{
+		mpv:        mpv,
+		events:     make(chan Event, stateEventBuffer),
+		state:      StateStopped,
+		volume:     volume,
+		socketPath: cfg.SocketPath,
+	}
+
+	go p.watch(mpv, p.events)
+
+	return p, nil
+}
+
+// startMPV launches an idle mpv and configures the properties Termelody needs.
+// Restart goes through the same setup, so a replacement behaves like the
+// instance it took over from instead of quietly losing observation or the
+// volume ceiling.
+func startMPV(socketPath string) (*ipc.MPV, error) {
 	// An empty path resolves to a private socket; ipc owns that choice.
-	mpv, err := ipc.LaunchEmpty(cfg.SocketPath)
+	mpv, err := ipc.LaunchEmpty(socketPath)
 	if err != nil {
 		return nil, err
 	}
@@ -167,38 +231,17 @@ func NewWithConfig(cfg Config) (*Player, error) {
 		return nil, fmt.Errorf("failed to set volume-max: %w", err)
 	}
 
-	// Reading volume rather than starting at mpv's default of 100 keeps the
-	// first report honest. Observing sends the current value too, but only
-	// once the event goroutine below drains it, so a render that beat it
-	// would otherwise claim silence.
-	raw, err := mpv.GetProperty("volume")
-	if err != nil {
-		_ = mpv.Quit()
-		return nil, fmt.Errorf("failed to read volume: %w", err)
-	}
-	volume, ok := raw.(float64)
-	if !ok {
-		_ = mpv.Quit()
-		return nil, fmt.Errorf("volume came back as %T, want a number", raw)
-	}
-
-	p := &Player{
-		mpv:    mpv,
-		events: make(chan Event, stateEventBuffer),
-		state:  StateStopped,
-		volume: volume,
-	}
-
-	go p.watch()
-
-	return p, nil
+	return mpv, nil
 }
 
 // watch converts mpv events into player state and forwards them for consumers.
-func (p *Player) watch() {
-	defer close(p.events)
+// It takes the instance it belongs to rather than reading p.mpv, so a restart
+// can swap the field without this goroutine suddenly listening to a different
+// process or racing the assignment.
+func (p *Player) watch(mpv *ipc.MPV, events chan Event) {
+	defer close(events)
 
-	for ev := range p.mpv.Events() {
+	for ev := range mpv.Events() {
 		p.apply(ev)
 
 		if !forwardable(ev) {
@@ -206,8 +249,8 @@ func (p *Player) watch() {
 		}
 
 		select {
-		case p.events <- ev:
-		case <-p.mpv.Done():
+		case events <- ev:
+		case <-mpv.Done():
 			// mpv has gone away, so there is nothing left worth forwarding.
 			return
 		}
@@ -268,14 +311,34 @@ func (p *Player) apply(ev Event) {
 	switch ev.Name {
 	case "file-loaded":
 		p.state = StatePlaying
+		// A pause command sent immediately before the load is observed
+		// while nothing is loaded yet, so the event alone cannot set the
+		// state. Consulting the last observed value lets a resumed track
+		// come back paused instead of briefly reporting it is playing.
+		if p.resumePaused {
+			p.state = StatePaused
+		}
 		p.loaded = true
 		p.pos = 0
+		// A loadfile with start= jumps here once mpv accepts it, and the
+		// real position follows in the next time-pos event. Starting the
+		// resume position at zero keeps a second crash during that window
+		// from carrying a stale offset into the new file.
+		p.resumePos = 0
 
 	case "end-file", "idle":
 		// Playback of the current file finished or was stopped. Note that
 		// loadfile also produces end-file for the file being replaced, and
 		// that arrives before the replacement's file-loaded, so the final
 		// state still settles on playing.
+		//
+		// wantPlayback only clears for reasons that mean nothing will
+		// follow. A replacement or redirect is about to load another file,
+		// and a quit still deserves recovery: the listener did not ask for
+		// silence through the player, so they should get their track back.
+		if ev.Name == "end-file" && stoppedPlayback(ev) {
+			p.wantPlayback = false
+		}
 		p.state = StateStopped
 		p.loaded = false
 		p.pos = 0
@@ -283,6 +346,26 @@ func (p *Player) apply(ev Event) {
 
 	case "property-change":
 		p.applyProperty(ev.Raw)
+	}
+}
+
+// stoppedPlayback reports whether an end-file event says the current track is
+// over for good. A file that reached its end or was explicitly stopped must
+// not be resumed after a restart; a quit or a replacement does not mean the
+// listener wants silence, and a crash emits no end-file at all.
+func stoppedPlayback(ev Event) bool {
+	var payload struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(ev.Raw, &payload); err != nil {
+		return false
+	}
+
+	switch payload.Reason {
+	case "eof", "stop":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -305,10 +388,19 @@ func (p *Player) applyProperty(raw []byte) {
 
 	switch change.Name {
 	case "pause":
-		// Ignore pause changes while stopped: a pause property is untouched
-		// by stop, so unpausing later must not invent a playing state.
+		// The value is recorded even while stopped, because a loadfile may
+		// apply a pause before the file is ready; file-loaded then uses
+		// this to decide whether the track starts playing or paused.
 		var paused bool
-		if json.Unmarshal(change.Data, &paused) != nil || !p.loaded {
+		if json.Unmarshal(change.Data, &paused) != nil {
+			return
+		}
+		p.resumePaused = paused
+
+		// Ignore pause changes for state while stopped: a pause property is
+		// untouched by stop, so unpausing later must not invent a playing
+		// state.
+		if !p.loaded {
 			return
 		}
 		if paused {
@@ -319,6 +411,9 @@ func (p *Player) applyProperty(raw []byte) {
 
 	case "time-pos":
 		p.pos = p.seconds(change.Data)
+		// The resume copy is never reset by end-file, because that event is
+		// exactly what a dying mpv emits before the listener sees the exit.
+		p.resumePos = p.pos
 
 	case "duration":
 		p.dur = p.seconds(change.Data)
@@ -345,10 +440,28 @@ func (p *Player) seconds(data json.RawMessage) time.Duration {
 
 // Play starts playing a track, replacing whatever is loaded.
 func (p *Player) Play(track playlist.Track) error {
-	if err := p.mpv.Play(track.Path); err != nil {
+	if err := p.instance().Play(track.Path); err != nil {
 		return fmt.Errorf("failed to play %s: %w", track.Path, err)
 	}
+
+	// A new track starts from the beginning, and resuming it should not
+	// inherit the paused state of whatever it replaced.
+	p.mu.Lock()
+	p.wantPlayback = true
+	p.resumePos = 0
+	p.resumePaused = false
+	p.mu.Unlock()
+
 	return nil
+}
+
+// instance returns the mpv the player is currently driving. Taking it under the
+// lock is what makes a swap in Restart safe while another goroutine sends a
+// command to the old one.
+func (p *Player) instance() *ipc.MPV {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mpv
 }
 
 // PlayIndex plays the track at the given position in the playlist.
@@ -598,24 +711,34 @@ func (p *Player) syncShufflePosLocked() {
 
 // Pause pauses playback.
 func (p *Player) Pause() error {
-	return p.mpv.Pause()
+	return p.instance().Pause()
 }
 
 // Resume unpauses playback.
 func (p *Player) Resume() error {
-	return p.mpv.Resume()
+	return p.instance().Resume()
 }
 
 // TogglePause flips between playing and paused. It deliberately does not
 // decide which way to flip based on State: mpv reports the outcome, so this
 // cannot disagree with reality.
 func (p *Player) TogglePause() error {
-	return p.mpv.TogglePause()
+	return p.instance().TogglePause()
 }
 
 // Stop stops playback entirely.
 func (p *Player) Stop() error {
-	return p.mpv.Stop()
+	if err := p.instance().Stop(); err != nil {
+		return err
+	}
+
+	// The listener asked for silence, so a later mpv crash must not bring
+	// the stopped track back.
+	p.mu.Lock()
+	p.wantPlayback = false
+	p.mu.Unlock()
+
+	return nil
 }
 
 // AdjustVolume moves the volume by delta percent, where negative lowers it.
@@ -624,7 +747,7 @@ func (p *Player) Stop() error {
 // that has not caught up yet. volume-max, set when the Player starts, clamps
 // add but not an absolute set, so the level cannot pass maxVolume either.
 func (p *Player) AdjustVolume(delta int) error {
-	if err := p.mpv.AddToProperty("volume", float64(delta)); err != nil {
+	if err := p.instance().AddToProperty("volume", float64(delta)); err != nil {
 		return fmt.Errorf("failed to adjust volume: %w", err)
 	}
 	return nil
@@ -635,23 +758,41 @@ func (p *Player) AdjustVolume(delta int) error {
 func (p *Player) Seek(delta time.Duration) error {
 	p.mu.Lock()
 	loaded := p.loaded
+	mpv := p.mpv
 	p.mu.Unlock()
 
 	if !loaded {
 		return nil
 	}
 
-	return p.mpv.SeekRelative(delta.Seconds())
+	return mpv.SeekRelative(delta.Seconds())
 }
 
 // Events returns the stream of playback events. It is closed when mpv exits.
 func (p *Player) Events() <-chan Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.events
 }
 
-// Done is closed once the mpv process has exited, whether from Quit or a crash.
+// Done is closed once the currently installed mpv process has exited, whether
+// from Quit or a crash. A stale listener that captured the old channel still
+// sees the old instance's exit, which is what tells the UI to recover.
 func (p *Player) Done() <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.mpv.Done()
+}
+
+// Err reports why the installed mpv exited. It blocks until the process is
+// reaped, so it must be called from a command or goroutine, never from Update
+// or View. The UI calls it only after Done or the event stream has fired, so
+// there is no restart in flight to swap the instance underneath it.
+func (p *Player) Err() error {
+	p.mu.Lock()
+	mpv := p.mpv
+	p.mu.Unlock()
+	return mpv.Err()
 }
 
 // State returns what mpv is currently doing.
@@ -718,7 +859,110 @@ func (p *Player) Track() playlist.Track {
 	return p.tracks[p.index]
 }
 
-// Close shuts down the mpv process and waits for it to exit.
+// Restart replaces the dead mpv process and resumes what the listener was
+// hearing. It refuses while the old process is still alive: relaunching over a
+// running instance would leave two mpv processes writing to the same socket and
+// neither of them owned by the player. Close and Restart share a lock, so
+// shutdown cannot install a process after the deferred cleanup has already run.
+//
+// The same Player is kept on purpose. main's deferred Close stays the single
+// owner of shutdown, and consumers keep using the same track list, shuffle
+// order, and repeat mode across the outage.
+func (p *Player) Restart() error {
+	p.lifecycle.Lock()
+	defer p.lifecycle.Unlock()
+
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errClosed
+	}
+
+	old, oldEvents := p.mpv, p.events
+	want := p.wantPlayback
+	pos := p.resumePos
+	paused := p.resumePaused
+	volume := p.volume
+	index := p.index
+	tracks := p.tracks
+	p.mu.Unlock()
+
+	select {
+	case <-old.Done():
+	default:
+		return errors.New("mpv is still running")
+	}
+
+	// Drain the old stream so its watcher cannot fold a final event into the
+	// state after the replacement has been installed. Restart is only reached
+	// once the UI has stopped listening, so nothing else needs these events.
+	for range oldEvents {
+	}
+
+	var trackPath string
+	if want && index >= 0 && index < len(tracks) {
+		trackPath = tracks[index].Path
+	}
+
+	mpv, err := startMPV(p.socketPath)
+	if err != nil {
+		return err
+	}
+
+	// Volume belongs to the process, not to the track, so a replacement
+	// starts at mpv's default unless it is set back explicitly.
+	if err := mpv.SetProperty("volume", volume); err != nil {
+		_ = mpv.Quit()
+		return fmt.Errorf("failed to restore volume: %w", err)
+	}
+
+	events := make(chan Event, stateEventBuffer)
+
+	p.mu.Lock()
+	p.mpv = mpv
+	p.events = events
+	p.loaded = false
+	p.state = StateStopped
+	p.pos = 0
+	p.dur = 0
+	p.volume = volume
+	p.wantPlayback = want
+	p.resumePos = pos
+	p.resumePaused = paused
+	p.mu.Unlock()
+
+	go p.watch(mpv, events)
+
+	if trackPath == "" {
+		// mpv died while stopped; there is nothing to resume, and the
+		// replacement is ready for the next play command.
+		return nil
+	}
+
+	if err := mpv.PlayAt(trackPath, pos.Seconds(), paused); err != nil {
+		// Quit the half-started replacement so the next attempt begins from
+		// a clean process instead of finding a live one it must refuse.
+		_ = mpv.Quit()
+		return fmt.Errorf("failed to resume %s: %w", trackPath, err)
+	}
+
+	return nil
+}
+
+// Close shuts down the mpv process and waits for it to exit. It is safe to call
+// more than once, and it blocks a concurrent Restart instead of racing it.
 func (p *Player) Close() error {
-	return p.mpv.Quit()
+	p.lifecycle.Lock()
+	defer p.lifecycle.Unlock()
+
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil
+	}
+	p.closed = true
+	mpv := p.mpv
+	p.mu.Unlock()
+
+	return mpv.Quit()
 }

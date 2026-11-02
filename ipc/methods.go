@@ -1,10 +1,38 @@
 package ipc
 
-// Play sends a loadfile command to mpv. This replaces any
-// currently playing track.
+import "fmt"
+
+// Play sends a loadfile command to mpv. This replaces any currently playing
+// track. Pause is cleared explicitly instead of through mpv's
+// --reset-on-next-file=pause, because that reset also undoes the pause of a
+// recovered track; without it, a new choice starts playing even if the
+// previous track was paused.
 func (m *MPV) Play(filePath string) error {
-	_, err := m.Command([]any{"loadfile", filePath})
-	return err
+	if _, err := m.Command([]any{"loadfile", filePath}); err != nil {
+		return err
+	}
+	return m.Resume()
+}
+
+// PlayAt loads a file and starts it at the given position in seconds,
+// optionally paused. Start and pause travel as loadfile options so playback
+// never begins at the wrong place, and a paused resume does not make a sound
+// first. The pause is set again afterwards because mpv may accept the option
+// before the file is ready.
+func (m *MPV) PlayAt(filePath string, start float64, paused bool) error {
+	options := fmt.Sprintf("start=%.3f", start)
+	if paused {
+		options += ",pause=yes"
+	}
+
+	if _, err := m.Command([]any{"loadfile", filePath, "replace", -1, options}); err != nil {
+		return err
+	}
+
+	if paused {
+		return m.Pause()
+	}
+	return m.Resume()
 }
 
 // Pause pauses playback.

@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -127,12 +126,62 @@ const (
 // visible and costs a full repaint of the screen.
 const tickInterval = 200 * time.Millisecond
 
+// maxRecoveryAttempts bounds automatic relaunches of a broken mpv. Without a
+// ceiling a persistently failing binary would respawn forever, keeping the
+// terminal locked in a reconnect loop the listener cannot stop.
+const maxRecoveryAttempts = 3
+
+// healthyDelay is how long a replacement mpv has to stay up before its attempt
+// budget is reset. Resetting on launch would let a crash loop that survives a
+// second or two retry indefinitely.
+const healthyDelay = 30 * time.Second
+
 // tickMsg asks the model to refresh the progress readout.
 type tickMsg time.Time
 
 // tick schedules the next refresh.
 func tick() tea.Cmd {
 	return tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+// recoveredMsg carries the outcome of one automatic relaunch. session is what
+// keeps a result from an older outage from touching a newer one.
+type recoveredMsg struct {
+	session int
+	err     error
+}
+
+// recoverRetryMsg asks for another relaunch once the backoff has elapsed.
+type recoverRetryMsg struct{ session int }
+
+// mpvHealthyMsg reports that a restarted mpv survived long enough to reset the
+// attempt budget.
+type mpvHealthyMsg struct{ session int }
+
+// recoverCmd relaunches mpv off the Bubble Tea goroutine. Restart is
+// deliberately not called from Update: it starts a process and talks IPC.
+func recoverCmd(p *player.Player, session int) tea.Cmd {
+	return func() tea.Msg {
+		return recoveredMsg{session: session, err: p.Restart()}
+	}
+}
+
+// retryRecovery waits before the next attempt. The growing delay gives a
+// transient failure time to clear without making the listener wait long for a
+// recovery that would have worked immediately.
+func retryRecovery(session, failures int) tea.Cmd {
+	delay := time.Duration(failures) * 500 * time.Millisecond
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return recoverRetryMsg{session: session}
+	})
+}
+
+// healthyAfter schedules the point at which a successful restart is trusted
+// enough to reset the attempt budget.
+func healthyAfter(session int) tea.Cmd {
+	return tea.Tick(healthyDelay, func(time.Time) tea.Msg {
+		return mpvHealthyMsg{session: session}
+	})
 }
 
 // Model holds the entire state of the TUI.
@@ -147,6 +196,15 @@ type Model struct {
 	dur      time.Duration
 	mpvErr   error
 	quitting bool
+
+	// recovering marks an outage whose relaunch has not finished yet.
+	// recoverAttempts counts launches that failed since mpv was last known
+	// healthy; it is only cleared after a replacement survives healthyDelay,
+	// so a crash loop cannot reset its own budget by briefly starting.
+	recovering      bool
+	recoverAttempts int
+	recoverSession  int
+	recoverErr      error
 
 	// configPath is where the options screen writes preferences. It is empty
 	// when no config directory could be resolved; the screen still opens, but
@@ -178,11 +236,13 @@ func waitForEvent(p *player.Player) tea.Cmd {
 		select {
 		case ev, ok := <-p.Events():
 			if !ok {
-				return mpvGoneMsg{}
+				return mpvGoneMsg{err: p.Err()}
 			}
 			return eventMsg(ev)
 		case <-p.Done():
-			return mpvGoneMsg{}
+			// Err waits for the process to be reaped, so Restart can rely on
+			// the old instance being fully gone by the time it runs.
+			return mpvGoneMsg{err: p.Err()}
 		}
 	}
 }
@@ -253,8 +313,62 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.player)
 
 	case mpvGoneMsg:
-		// Without mpv there is nothing to control, so stop asking it.
-		m.mpvErr = errors.New("mpv exited unexpectedly")
+		// Every key would fail against a dead mpv, so relight it before
+		// asking the listener to do anything else. A second report for an
+		// outage already being handled is stale: the listener that produced
+		// it was armed against the old event stream.
+		if m.quitting || m.recovering || m.recoverErr != nil {
+			return m, nil
+		}
+
+		// The attempt count is deliberately not reset here. A replacement
+		// that dies within healthyDelay is still part of the same outage,
+		// and only mpvHealthyMsg may grant a fresh budget.
+		m.recovering = true
+		m.recoverSession++
+		m.recoverErr = nil
+		m.mpvErr = msg.err
+		return m, recoverCmd(m.player, m.recoverSession)
+
+	case recoveredMsg:
+		// A result from an older outage must not end or retry a newer one.
+		if msg.session != m.recoverSession || !m.recovering {
+			return m, nil
+		}
+
+		if msg.err != nil {
+			m.recoverAttempts++
+			if m.recoverAttempts >= maxRecoveryAttempts {
+				m.recovering = false
+				m.recoverErr = fmt.Errorf(
+					"mpv stopped and could not be restarted after %d attempts: %w",
+					maxRecoveryAttempts, msg.err)
+				return m, nil
+			}
+			return m, retryRecovery(msg.session, m.recoverAttempts)
+		}
+
+		m.recovering = false
+		m.recoverErr = nil
+		m.mpvErr = nil
+		// The player swapped its event stream during Restart, so the old
+		// listener is already spent. Re-arming against the new one is what
+		// makes playback events arrive again.
+		return m, tea.Batch(waitForEvent(m.player), healthyAfter(msg.session))
+
+	case recoverRetryMsg:
+		if msg.session != m.recoverSession || !m.recovering {
+			return m, nil
+		}
+		return m, recoverCmd(m.player, msg.session)
+
+	case mpvHealthyMsg:
+		// Only the session that is still current may reset the budget. A
+		// replacement that died before this fired leaves a stale timer behind
+		// precisely so it cannot grant a fresh round of retries.
+		if msg.session == m.recoverSession && !m.recovering && m.recoverErr == nil {
+			m.recoverAttempts = 0
+		}
 		return m, nil
 
 	case configSavedMsg:
@@ -277,6 +391,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// playback, and none of the playback keys may edit settings.
 		if m.settingsOpen {
 			return m.updateSettings(msg)
+		}
+
+		// A dead player can only be left, and a reconnecting one has no mpv
+		// to act on. Letting playback keys through would either error on
+		// every press or, worse, look like they did something.
+		if m.recoverErr != nil {
+			if msg.String() == "q" || msg.String() == "ctrl+c" {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
+		if m.recovering {
+			switch msg.String() {
+			case "q", "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			case "o":
+				// Options stay reachable during a reconnect: they do not
+				// touch mpv, and changing a preference while waiting is
+				// harmless.
+				m.openSettings()
+			}
+			return m, nil
 		}
 
 		switch msg.String() {
@@ -504,7 +643,28 @@ func (m Model) View() string {
 
 	below += m.progressBar() + "\n"
 
-	if m.mpvErr != nil {
+	if m.recovering {
+		attempt := min(m.recoverAttempts+1, maxRecoveryAttempts)
+		text := fmt.Sprintf("  mpv stopped; reconnecting (attempt %d of %d)…", attempt, maxRecoveryAttempts)
+		if m.width > 0 {
+			text = fitRight(text, m.width)
+		}
+		below += errorStyle.Render(text) + "\n"
+	}
+
+	if m.recoverErr != nil {
+		text := fmt.Sprintf("  %v", m.recoverErr)
+		if m.width > 0 {
+			text = fitRight(text, m.width)
+		}
+		below += errorStyle.Render(text) + "\n"
+		below += statusStyle.Render("  press q to quit") + "\n"
+	}
+
+	// While recovering, the exit reason is secondary to whether the
+	// replacement comes up; after exhaustion recoverErr is the actionable
+	// message. Only a healthy player with a leftover command error shows it.
+	if m.mpvErr != nil && !m.recovering && m.recoverErr == nil {
 		text := fmt.Sprintf("  %v", m.mpvErr)
 		if m.width > 0 {
 			text = fitRight(text, m.width)

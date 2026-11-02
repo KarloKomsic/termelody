@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -494,6 +495,142 @@ func TestAutoAdvanceWithRepeatAllWraps(t *testing.T) {
 	}
 	if m.player.Index() != 0 {
 		t.Errorf("player index = %d, want 0: repeat-all did not wrap", m.player.Index())
+	}
+}
+
+func TestMPVExitStartsRecovery(t *testing.T) {
+	m := newTestModel(t, Config{})
+
+	updated, cmd := m.Update(mpvGoneMsg{err: errors.New("mpv crashed")})
+	m = updated.(Model)
+
+	if !m.recovering {
+		t.Error("an mpv exit did not start recovery")
+	}
+	if cmd == nil {
+		t.Fatal("recovery began without a relaunch command")
+	}
+	if m.recoverErr != nil {
+		t.Errorf("recoverErr = %v before any attempt failed", m.recoverErr)
+	}
+	if m.mpvErr == nil {
+		t.Error("the exit error was dropped instead of being surfaced")
+	}
+}
+
+// Three failed relaunches exhaust the budget. Retrying forever would leave the
+// terminal in a reconnect loop with no way to act on the error.
+func TestRecoveryGivesUpAfterMaxAttempts(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 100, 24
+
+	m.recovering = true
+	m.recoverSession = 4
+
+	for attempt := 1; attempt <= maxRecoveryAttempts; attempt++ {
+		m = m.apply(recoveredMsg{session: 4, err: errors.New("launch failed")})
+		if attempt < maxRecoveryAttempts {
+			if !m.recovering {
+				t.Fatalf("gave up after %d attempts", attempt)
+			}
+			continue
+		}
+
+		if m.recovering {
+			t.Error("still reconnecting after the last allowed attempt")
+		}
+		if m.recoverErr == nil {
+			t.Fatal("exhausted recovery reported no error")
+		}
+	}
+
+	out := m.View()
+	if !strings.Contains(out, "could not be restarted") {
+		t.Errorf("view does not explain the failed recovery:\n%s", out)
+	}
+	if !strings.Contains(out, "press q to quit") {
+		t.Errorf("view does not tell the listener how to leave:\n%s", out)
+	}
+	if got := lipgloss.Height(out); got != m.height {
+		t.Errorf("rendered %d lines, want exactly %d", got, m.height)
+	}
+}
+
+func TestExhaustedRecoveryOnlyAcceptsQuit(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.recoverErr = errors.New("mpv is gone")
+
+	m = m.apply(runeMsg('z'))
+	if m.player.Shuffle() {
+		t.Error("a playback key ran after recovery gave up")
+	}
+	m = m.apply(runeMsg('o'))
+	if m.settingsOpen {
+		t.Error("options opened even though only quitting is allowed")
+	}
+	m = m.apply(runeMsg('j'))
+	if m.cursor != 0 {
+		t.Error("the cursor moved after recovery gave up")
+	}
+
+	m = m.apply(runeMsg('q'))
+	if !m.quitting {
+		t.Error("q did not quit after recovery gave up")
+	}
+}
+
+func TestReconnectingAllowsOptionsButNotPlayback(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.recovering = true
+
+	m = m.apply(runeMsg('z'))
+	if m.player.Shuffle() {
+		t.Error("a playback key ran while mpv was reconnecting")
+	}
+
+	m = m.apply(runeMsg('o'))
+	if !m.settingsOpen {
+		t.Error("options did not open while reconnecting")
+	}
+}
+
+// The budget is measured by wall-clock health, not by how recently mpv
+// started: only a long-lived replacement may grant a fresh set of attempts.
+func TestHealthyReplacementResetsAttemptBudget(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.recoverSession = 9
+	m.recoverAttempts = 2
+
+	m = m.apply(mpvHealthyMsg{session: 8})
+	if m.recoverAttempts != 2 {
+		t.Error("a stale health report reset the attempt budget")
+	}
+
+	m.recovering = true
+	m = m.apply(mpvHealthyMsg{session: 9})
+	if m.recoverAttempts != 2 {
+		t.Error("a health report reset the budget during an outage")
+	}
+
+	m.recovering = false
+	m = m.apply(mpvHealthyMsg{session: 9})
+	if m.recoverAttempts != 0 {
+		t.Errorf("attempts = %d after a healthy replacement, want 0", m.recoverAttempts)
+	}
+}
+
+func TestViewShowsReconnectAttempt(t *testing.T) {
+	m := newTestModel(t, Config{})
+	m.width, m.height = 100, 24
+	m.recovering = true
+	m.recoverAttempts = 1
+
+	out := m.View()
+	if !strings.Contains(out, "reconnecting (attempt 2 of 3)") {
+		t.Errorf("view does not report the attempt:\n%s", out)
+	}
+	if got := lipgloss.Height(out); got != m.height {
+		t.Errorf("rendered %d lines, want exactly %d", got, m.height)
 	}
 }
 

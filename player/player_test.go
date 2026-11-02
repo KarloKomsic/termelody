@@ -1,6 +1,7 @@
 package player
 
 import (
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -790,4 +791,111 @@ func TestZeroVolumeIsReported(t *testing.T) {
 	setVolume(t, p, 0)
 
 	wantVolume(t, p, 0)
+}
+
+// killMPV takes the process away the way a crash would: the player has to learn
+// about it from the event stream and its own Done channel, not from Close.
+func killMPV(t *testing.T, p *Player) {
+	t.Helper()
+
+	if err := p.mpv.Quit(); err != nil {
+		t.Fatalf("kill mpv: %v", err)
+	}
+	<-p.Done()
+}
+
+// A restart over a live process would leave two mpv instances and only one
+// socket, so it has to refuse rather than try to take over.
+func TestRestartRefusesWhileMPVIsRunning(t *testing.T) {
+	p := newTestPlayer(t)
+
+	if err := p.Restart(); err == nil {
+		t.Error("Restart relaunched a live mpv")
+	}
+}
+
+func TestRestartRefusesAfterClose(t *testing.T) {
+	p := newTestPlayer(t)
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := p.Restart(); !errors.Is(err, errClosed) {
+		t.Errorf("restart after close = %v, want %v", err, errClosed)
+	}
+}
+
+// The whole point of recovery is that the listener keeps hearing the same
+// track. Position and volume have to come back too, or the replacement starts
+// the song over at a different loudness.
+func TestRestartResumesPlaybackState(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	p := newTestPlayer(t)
+	p.SetPlaylist(tracks(file))
+	if err := p.PlayIndex(0); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	wantState(t, p, StatePlaying)
+
+	setVolume(t, p, 55)
+	if err := p.Seek(8 * time.Second); err != nil {
+		t.Fatalf("seek: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for p.Position() < 7*time.Second && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := p.Position(); got < 7*time.Second {
+		t.Fatalf("position = %s, want at least 7s before the crash", got)
+	}
+
+	killMPV(t, p)
+	if err := p.Restart(); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	wantState(t, p, StatePlaying)
+	wantVolume(t, p, 55)
+
+	deadline = time.Now().Add(10 * time.Second)
+	for p.Position() < 6*time.Second && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := p.Position(); got < 6*time.Second {
+		t.Errorf("position after restart = %s, want it resumed near 8s", got)
+	}
+	if got := p.Track().Path; got != file {
+		t.Errorf("track after restart = %q, want %q", got, file)
+	}
+}
+
+// Paused is a state the listener chose, so recovery must not start the track
+// playing just because the process was replaced.
+func TestRestartResumesPausedTrack(t *testing.T) {
+	file := testFile(t, 30)
+	if file == "" {
+		t.Skip("ffmpeg unavailable")
+	}
+
+	p := newTestPlayer(t)
+	p.SetPlaylist(tracks(file))
+	if err := p.PlayIndex(0); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	wantState(t, p, StatePlaying)
+
+	if err := p.TogglePause(); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	wantState(t, p, StatePaused)
+
+	killMPV(t, p)
+	if err := p.Restart(); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	wantState(t, p, StatePaused)
 }

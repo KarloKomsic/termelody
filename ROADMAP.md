@@ -40,4 +40,9 @@
 - [x] Shuffle and repeat
 - [x] Load preferences from a config file
 - [x] Edit preferences from the TUI
-- [ ] Error recovery and reconnection
+- [x] Error recovery and reconnection
+
+## Phase 5 - Post-1.0
+
+- [ ] MPRIS and media-key integration
+- [ ] Ability to choose themes between light and dark variant. Light variant: Catppuccin Latte, Solarized, Nord, Tokyo Night, Rose Pine, Gruvbox, Everforest, Github, One, Kanagawa Lotus. Dark variant: Catppuccin (the other 3 variants), Nord, Tokyo Night, Rose Pine, Gruvbox, Everforest, Github, One, Kanagawa, Solarized, Dracula, Darcula, One Dark, Synthwave '84

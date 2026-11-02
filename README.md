@@ -1,3 +1,7 @@
+<p align="center">
+  <img alt="Termelody logo" src="./assets/termelody-256.png" align="center">
+</p>
+
 # Termelody
 
 > [!NOTE]
@@ -6,24 +10,89 @@
 > The architecture, tech-stack, and design choices + tradeoffs are entirely made by myself. Agents only help me write the code faster
 > once I've gone over the architecture and design decisions, not do the thinking for me. This code and design is my own, no matter the goods or bads.
 
-A keyboard-driven terminal music player written in Go.
+A (hopefully) simple, keyboard-driven terminal music player written in Go.
 
-## Status
+## What this is
+Regular music players that usually run through a GUI frankly bore me. It's all "click, click, click" to open a directory and get to the songs I really want to listen. So, I decided, why not expedite this and turn it into something I can use, *in the terminal?* This project is exactly that.
+I understand it might not be for everyone, but this project is ultimately something I created for myself, by myself, as an avid terminal user.
 
-Early development. Playback, playlist navigation, and seeking work through mpv IPC,
-with playback state and position read from the event stream mpv pushes rather
-than assumed from the commands that were sent.
+With that, Termelody aspires to be a simple enough music player that anyone can launch in the terminal, without any mandatory arguments (CLI options are still welcome, though).
+
+## State of the project
+Right now, it's at a solid 1.0, because the basic, main features that a music player should have are included. However, customization options are yet to come, along with some further MPRIS integration, along with many more things to polish this even more.
+Currently supported only on *Linux* (any distribution that supports Golang), though compatibility to other platforms might come. Sadly no promises since I've made this project for myself.
+
+## Screenshots
+
+*The folder picker you see on launch*
+
+![Termelody folder picker](./assets/screenshots/TUI-Picker.png)
+
+*The player*
+
+![Termelody player](./assets/screenshots/Main-app.png)
+
+## So, how does it work?
+I'm not an expert developer, unfortunately. I use **mpv** as the playback engine and drive it over IPC. Termelody doesn't reimplement audio decoding; it gives you a small, keyboard-driven terminal front end for a player that already does the hard part.
+
+If mpv dies, Termelody relaunches it and resumes the track at its last position, including paused state and volume. It retries three times; if every attempt fails, the error stays on screen and only `q` or `ctrl+c` is accepted.
+
+## Requirements
+
+- [mpv](https://mpv.io) on your `PATH`; Termelody drives it over IPC and does not
+  bundle a player of its own.
+- Go 1.26.5 or newer, if you build from source.
+
+## Install
+
+Install into a directory that is already on your `PATH`:
+
+```sh
+GOBIN="$HOME/.local/bin" go install codeberg.org/karlokomsic/termelody/cmd/termelody@latest
+```
+
+`go install` writes to `$(go env GOPATH)/bin` when `GOBIN` is unset. If that
+directory is on your `PATH`, the plain form works too:
+
+```sh
+go install codeberg.org/karlokomsic/termelody/cmd/termelody@latest
+```
+
+Otherwise add it to your shell, for example in `~/.zshrc`:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+To build from a clone instead:
+
+```sh
+git clone https://codeberg.org/karlokomsic/termelody
+cd termelody
+go build -o termelody ./cmd/termelody
+mkdir -p "$HOME/.local/bin"
+install -m 755 termelody "$HOME/.local/bin/termelody"
+```
+
+Verify the binary is on your `PATH`:
+
+```sh
+command -v termelody
+```
+
+Then run `termelody`, or `termelody ~/Music` to skip the picker.
 
 ## Controls
 
 | Key | Action |
 |---|---|
 | `j` / `k`, `↓` / `↑` | move selection |
+| `g` / `G` | jump to top / bottom |
 | `←` / `→` | seek back / forward (default 5s) |
 | `enter` | play selected track |
 | `space` | play / pause |
 | `n` / `p`, `>` / `<` | next / previous track |
-| `+` / `-` | volume up / down |
+| `+` / `=` / `-` | volume up / down |
 | `z` | toggle shuffle |
 | `r` | cycle repeat: off → all → one |
 | `o` | open options |
@@ -39,7 +108,7 @@ choice.
 ## Usage
 
 ```sh
-termelody [-seek duration] [-hidden] [-icons set] [music directory]
+termelody [-seek duration] [-hidden] [-icons set] [-version] [music directory]
 ```
 
 - `-seek` — how far `←` / `→` jump, e.g. `-seek 30s` (default `5s`)
@@ -48,6 +117,7 @@ termelody [-seek duration] [-hidden] [-icons set] [music directory]
   standard Unicode, no patched font needed), `nerd` (folder and music glyphs
   from Nerd Fonts, which need a patched terminal font), or `none` (default
   `unicode`)
+- `-version`, `-v` — print the version and exit
 - With no music directory, a folder picker opens at `$HOME`; only folders are
   listed. Dot-directories are hidden by default; `.` toggles them in the picker.
   Symlinked folders are listed and marked with `@`; broken links and links to
@@ -93,7 +163,7 @@ the terminal:
 |---|---|
 | `j` / `k`, `↓` / `↑` | move between rows |
 | `←` / `→`, `enter` | change the selected value |
-| `esc`, `q` | save and close |
+| `esc`, `q` | close, saving if anything changed |
 | `ctrl+c` | quit without saving |
 
 Changes to `seek`, `icons`, and `volume_step` apply immediately. `show_hidden`
@@ -116,15 +186,3 @@ changing anything leaves the file untouched.
 | `.` | show / hide dot-directories |
 | `q`, `esc` | cancel |
 
-## Goals
-
-- Learn Go through building a real application.
-- Create a fast terminal music player.
-- Practice concurrency, IPC, and TUI development.
-
-## Stack
-
-- Go
-- Bubble Tea
-- Lip Gloss
-- mpv
